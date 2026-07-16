@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import Codex_ImageGen_Proxy
+@testable import GPTSwitch
 
 final class ResponsesBridgeTests: XCTestCase {
     func testParsesJSONMislabeledAsEventStream() throws {

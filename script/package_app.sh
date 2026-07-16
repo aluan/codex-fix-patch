@@ -7,7 +7,7 @@ SCHEME="CodexImageGenProxy"
 DERIVED_DATA="$ROOT_DIR/.build/ReleaseDerivedData"
 DIST_DIR="$ROOT_DIR/dist/app"
 STAGING_DIR="$DIST_DIR/dmg-root"
-APP_NAME="Codex ImageGen Proxy"
+APP_NAME="GPTSwitch"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT_DIR/App/Resources/Info.plist")"
 
@@ -35,10 +35,10 @@ ln -s /Applications "$STAGING_DIR/Applications"
   -srcfolder "$STAGING_DIR" \
   -ov \
   -format UDZO \
-  "$DIST_DIR/Codex-ImageGen-Proxy-v$VERSION.dmg"
+  "$DIST_DIR/GPTSwitch-v$VERSION.dmg"
 
-(cd "$DIST_DIR" && /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_NAME.app" "Codex-ImageGen-Proxy-v$VERSION.zip")
-(cd "$DIST_DIR" && /usr/bin/shasum -a 256 "Codex-ImageGen-Proxy-v$VERSION.dmg" "Codex-ImageGen-Proxy-v$VERSION.zip" > SHA256SUMS.txt)
+(cd "$DIST_DIR" && /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_NAME.app" "GPTSwitch-v$VERSION.zip")
+(cd "$DIST_DIR" && /usr/bin/shasum -a 256 "GPTSwitch-v$VERSION.dmg" "GPTSwitch-v$VERSION.zip" > SHA256SUMS.txt)
 
 echo "Artifacts:"
-ls -lh "$DIST_DIR/Codex-ImageGen-Proxy-v$VERSION.dmg" "$DIST_DIR/Codex-ImageGen-Proxy-v$VERSION.zip" "$DIST_DIR/SHA256SUMS.txt"
+ls -lh "$DIST_DIR/GPTSwitch-v$VERSION.dmg" "$DIST_DIR/GPTSwitch-v$VERSION.zip" "$DIST_DIR/SHA256SUMS.txt"

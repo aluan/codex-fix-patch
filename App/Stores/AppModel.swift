@@ -51,12 +51,17 @@ final class AppModel {
         loginItemEnabled = loginItemService.isEnabled
         do {
             _ = try migrationService.migrateIfNeeded()
-            if let saved = try stateStore.load() {
+            if var saved = try stateStore.load() {
+                let refreshLoginItem = saved.toolVersion != ProxyConfiguration.currentToolVersion
+                if refreshLoginItem {
+                    saved.toolVersion = ProxyConfiguration.currentToolVersion
+                    try stateStore.save(saved)
+                }
                 configuration = saved
                 editablePort = String(saved.port)
                 editableBridgeModel = saved.bridgeModel
                 if saved.isEnabled {
-                    enableLoginItemIfPossible()
+                    enableLoginItemIfPossible(refresh: refreshLoginItem)
                     startProxy(with: saved)
                 } else {
                     status = .stopped
@@ -212,9 +217,9 @@ final class AppModel {
         }
     }
 
-    private func enableLoginItemIfPossible() {
+    private func enableLoginItemIfPossible(refresh: Bool = false) {
         do {
-            try loginItemService.setEnabled(true)
+            try loginItemService.setEnabled(true, refresh: refresh)
             loginItemEnabled = loginItemService.isEnabled
         } catch {
             lastError = "代理已启动，但无法注册登录启动：\(error.localizedDescription)"

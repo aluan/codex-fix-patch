@@ -46,7 +46,9 @@ final class NativeProxyServer: @unchecked Sendable {
             ClientConnectionHandler(
                 connection: connection,
                 queue: self.queue,
-                requestHandler: self.handle
+                requestHandler: { [weak self] request, connection in
+                    self?.handle(request, connection: connection)
+                }
             ).start()
         }
         self.listener = listener

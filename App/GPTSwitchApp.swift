@@ -1,14 +1,14 @@
 import SwiftUI
 
 @main
-struct CodexImageGenProxyApp: App {
+struct GPTSwitchApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            Label("Codex 生图代理", systemImage: model.status.symbolName)
+            Label("GPTSwitch", systemImage: model.status.symbolName)
         }
 
         Settings {
