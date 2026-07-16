@@ -9,6 +9,7 @@ struct MenuBarStatusIcon: View {
             .renderingMode(.template)
             .scaledToFit()
             .foregroundStyle(statusColor)
+            .frame(width: 14, height: 14)
             .frame(width: 16, height: 16)
             .accessibilityHidden(true)
     }
