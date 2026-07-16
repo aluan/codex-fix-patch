@@ -23,11 +23,11 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Image(systemName: model.status.symbolName)
-                .font(.system(size: 32))
-                .foregroundStyle(statusColor)
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .frame(width: 48, height: 48)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Codex ImageGen Proxy")
+                Text("GPTSwitch")
                     .font(.title2.weight(.semibold))
                 Text(model.status.title)
                     .foregroundStyle(.secondary)

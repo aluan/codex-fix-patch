@@ -6,9 +6,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$ROOT_DIR/CodexImageGenProxy.xcodeproj"
 SCHEME="CodexImageGenProxy"
 DERIVED_DATA="$ROOT_DIR/.build/DerivedData"
-APP_NAME="Codex ImageGen Proxy"
+APP_NAME="GPTSwitch"
 APP_BUNDLE="$DERIVED_DATA/Build/Products/Debug/$APP_NAME.app"
-PROCESS_NAME="CodexImageGenProxy"
+PROCESS_NAME="GPTSwitch"
 BUNDLE_ID="com.aluan.CodexImageGenProxy"
 
 if [ ! -d "$PROJECT" ]; then
@@ -16,6 +16,7 @@ if [ ! -d "$PROJECT" ]; then
 fi
 
 pkill -x "$PROCESS_NAME" >/dev/null 2>&1 || true
+pkill -x CodexImageGenProxy >/dev/null 2>&1 || true
 
 xcodebuild \
   -project "$PROJECT" \

@@ -1,6 +1,10 @@
-# Codex ImageGen Compatibility Proxy
+# GPTSwitch
 
-面向 macOS Codex App 与第三方 Responses API 中转站的版本无关生图兼容工具。
+<p align="center">
+  <img src="App/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512.png" alt="GPTSwitch Logo" width="180">
+</p>
+
+面向 macOS Codex App 与第三方 Responses API 中转站的原生生图兼容工具。GPTSwitch 通过本地 API 路由切换，让只支持 Responses 托管生图的中转站兼容新版 Codex Images API。
 
 新版 Codex 会调用独立的 `POST /images/generations`，部分中转站只支持 Responses API 托管 `image_generation`，因此会返回 `404`。本工具在 Mac 本机启动一个原生 Swift 代理，自动完成 Images API 与 Responses API 之间的转换。
 
@@ -14,7 +18,7 @@
 
 从 [GitHub Releases](https://github.com/aluan/codex-fix-patch/releases/latest) 下载最新版 DMG 或 ZIP：
 
-1. 将 `Codex ImageGen Proxy.app` 拖入“应用程序”。
+1. 将 `GPTSwitch.app` 拖入“应用程序”。
 2. 首次启动后，点击菜单栏图标并打开“设置”。
 3. 确认 Provider、上游地址、桥接模型和端口，点击“应用并启动”。
 4. 按 `Command + Q` 完全退出 Codex，再重新打开。无需重启电脑。
@@ -22,11 +26,11 @@
 当前 GitHub 包使用 ad-hoc 签名，尚未经过 Apple 公证。如果 macOS 阻止首次打开，可在 Finder 中右键 App 选择“打开”；仍被阻止时运行：
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/Codex ImageGen Proxy.app"
-open "/Applications/Codex ImageGen Proxy.app"
+xattr -dr com.apple.quarantine "/Applications/GPTSwitch.app"
+open "/Applications/GPTSwitch.app"
 ```
 
-App 是菜单栏工具，不显示 Dock 图标。可以在设置中开启“登录后自动运行”。
+GPTSwitch 是菜单栏工具，不显示 Dock 图标。启用代理后会自动注册登录启动，也可以在设置中关闭。
 
 ## 使用
 
@@ -77,7 +81,7 @@ http://127.0.0.1:17891/api
 
 ## 从旧版迁移
 
-如果安装过 `v1.1.0` Python 代理，原生 App 首次启动时会自动：
+如果安装过 `v1.1.0` Python 代理，GPTSwitch 首次启动时会自动：
 
 1. 导入旧状态和端口配置。
 2. 停止并移除旧 LaunchAgent。
@@ -85,6 +89,8 @@ http://127.0.0.1:17891/api
 4. 在原生代理成功监听后删除旧 Python 运行文件。
 
 Codex 的 `base_url` 会保持不变，迁移过程中无需重新配置 Token。
+
+如果正在从 `v1.2.0` 的 `Codex ImageGen Proxy.app` 升级，GPTSwitch 会自动刷新登录项到新 App 路径。确认 GPTSwitch 正常运行后，可以删除旧名称的 App。
 
 ## 旧版命令行安装器
 
