@@ -1,18 +1,26 @@
+import AppKit
 import SwiftUI
 
 struct MenuBarStatusIcon: View {
     let status: ProxyRuntimeStatus
 
     var body: some View {
-        Image("MenuBarIcon")
-            .resizable()
+        Image(nsImage: Self.templateImage)
             .renderingMode(.template)
-            .scaledToFit()
             .foregroundStyle(statusColor)
             .frame(width: 14, height: 14)
-            .frame(width: 16, height: 16)
             .accessibilityHidden(true)
     }
+
+    private static let templateImage: NSImage = {
+        guard let source = NSImage(named: "MenuBarIcon"),
+              let image = source.copy() as? NSImage else {
+            return NSImage(size: NSSize(width: 14, height: 14))
+        }
+        image.size = NSSize(width: 14, height: 14)
+        image.isTemplate = true
+        return image
+    }()
 
     private var statusColor: Color {
         switch status {
