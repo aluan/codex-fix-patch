@@ -1,97 +1,127 @@
 # Codex ImageGen Compatibility Proxy
 
-面向 macOS ChatGPT/Codex App 与第三方 Responses API 中转站的版本无关生图兼容工具。
+面向 macOS Codex App 与第三方 Responses API 中转站的版本无关生图兼容工具。
 
-最新版 App 会通过独立 Images API 调用 `POST /images/generations`，部分中转站只支持 Responses API 托管 `image_generation`，因此返回 `404`。本工具在本机启动一个仅监听 `127.0.0.1` 的轻量代理：
+新版 Codex 会调用独立的 `POST /images/generations`，部分中转站只支持 Responses API 托管 `image_generation`，因此会返回 `404`。本工具在 Mac 本机启动一个原生 Swift 代理，自动完成 Images API 与 Responses API 之间的转换。
 
-- 普通 `/responses`、`/models` 等请求透明转发到原中转站。
-- `/images/generations` 和 `/images/edits` 转换为 Responses 托管 `image_generation` 调用。
-- 将托管调用返回的图片重新封装为 Images API 响应，由 App 自带 CLI 按官方流程保存和展示。
-- 不替换 App CLI，不修改 App Bundle，不受 App CLI 版本升级影响。
+- 不替换 Codex CLI，不修改 Codex.app。
+- Codex 升级后无需重新打补丁。
+- 只监听 `127.0.0.1`，不会暴露到局域网或公网。
+- 不保存、不打印 API Token 和请求正文。
+- 不依赖 Python 或其他运行时。
 
-## 一键安装
+## 安装 App
 
-推荐从 [GitHub Releases](https://github.com/aluan/codex-fix-patch/releases/latest) 下载 ZIP，解压后双击：
+从 [GitHub Releases](https://github.com/aluan/codex-fix-patch/releases/latest) 下载最新版 DMG 或 ZIP：
 
-```text
-Install Codex ImageGen Patch.command
+1. 将 `Codex ImageGen Proxy.app` 拖入“应用程序”。
+2. 首次启动后，点击菜单栏图标并打开“设置”。
+3. 确认 Provider、上游地址、桥接模型和端口，点击“应用并启动”。
+4. 按 `Command + Q` 完全退出 Codex，再重新打开。无需重启电脑。
+
+当前 GitHub 包使用 ad-hoc 签名，尚未经过 Apple 公证。如果 macOS 阻止首次打开，可在 Finder 中右键 App 选择“打开”；仍被阻止时运行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Codex ImageGen Proxy.app"
+open "/Applications/Codex ImageGen Proxy.app"
 ```
 
-也可以在终端运行：
+App 是菜单栏工具，不显示 Dock 图标。可以在设置中开启“登录后自动运行”。
+
+## 使用
+
+菜单栏提供以下操作：
+
+- 查看代理运行状态。
+- 启动或停止本地代理。
+- 运行一次真实生图自检。
+- 打开设置和运行日志。
+
+自检图片保存在：
+
+```text
+~/.codex/generated_images/proxy-self-test/
+```
+
+原生 App 状态保存在：
+
+```text
+~/Library/Application Support/CodexImageGenProxy/state.json
+```
+
+状态文件仅包含 Provider、上游地址、桥接模型和端口，不包含 Token。
+
+## Codex 升级
+
+Codex App 升级后不需要同步更新本工具。本工具不再替换 Codex 自带 CLI，只在本机处理 HTTP API 协议。
+
+只有未来 OpenAI 修改 Images API 或 Responses `image_generation` 协议时，才可能需要升级本工具。普通 Codex App 版本更新不会影响代理。
+
+## 工作原理
+
+启用时，App 会备份 `~/.codex/config.toml`，只把当前 Provider 的 `base_url` 改为同路径的本机地址，例如：
+
+```text
+https://relay.example/api
+          ↓
+http://127.0.0.1:17891/api
+```
+
+本地代理会：
+
+1. 将 `/responses`、`/models` 等普通请求透明转发到原中转站。
+2. 将 `/images/generations` 和 `/images/edits` 转为 Responses 托管 `image_generation`。
+3. 将返回图片重新封装为 Images API 响应，交给 Codex 保存和展示。
+
+停用时，仅当当前 `base_url` 仍指向本代理，App 才会自动恢复原地址，避免覆盖之后的手工修改。
+
+## 从旧版迁移
+
+如果安装过 `v1.1.0` Python 代理，原生 App 首次启动时会自动：
+
+1. 导入旧状态和端口配置。
+2. 停止并移除旧 LaunchAgent。
+3. 清除旧 `CODEX_CLI_PATH` 环境变量。
+4. 在原生代理成功监听后删除旧 Python 运行文件。
+
+Codex 的 `base_url` 会保持不变，迁移过程中无需重新配置 Token。
+
+## 旧版命令行安装器
+
+没有使用原生 App 时，仍可把 Python 版作为兼容后备：
 
 ```bash
 ./install-codex-imagegen-patch.sh
-```
-
-安装完成后按 `Command + Q` 完全退出 ChatGPT/Codex，再重新打开。无需重启电脑。
-
-## App 升级
-
-App 升级后不需要同步下载新补丁。本工具不再通过 `CODEX_CLI_PATH` 替换 CLI，App 始终使用自己携带的最新版后端；本地代理只处理稳定的 HTTP API 协议。
-
-如果未来 OpenAI 修改 Images API 或 Responses `image_generation` 协议，才需要更新本工具。
-
-## 常用命令
-
-```bash
 ./install-codex-imagegen-patch.sh --status
 ./install-codex-imagegen-patch.sh --test-image
 ./install-codex-imagegen-patch.sh --uninstall
-./install-codex-imagegen-patch.sh --dry-run
 ```
 
-可选参数：
+原生 App 与 Python 版不要同时运行在同一个端口。推荐只使用原生 App。
+
+## 开发
+
+要求 macOS 14+、Xcode 26+ 和 [XcodeGen](https://github.com/yonaskolb/XcodeGen)：
 
 ```bash
-./install-codex-imagegen-patch.sh --port 17891
-./install-codex-imagegen-patch.sh --bridge-model gpt-5.5
+brew install xcodegen
+./script/build_and_run.sh --verify
+xcodebuild test \
+  -project CodexImageGenProxy.xcodeproj \
+  -scheme CodexImageGenProxy \
+  -derivedDataPath .build/DerivedData \
+  CODE_SIGNING_ALLOWED=NO
+./script/package_app.sh
 ```
 
-默认使用 `~/.codex/config.toml` 顶层的 `model` 作为生图桥接模型。`--test-image` 会真实调用中转站并可能消耗额度。
-
-## 安装行为
-
-安装器会：
-
-1. 读取当前 `model_provider`、模型和对应的 `base_url`。
-2. 创建带时间戳的 `config.toml` 备份。
-3. 将当前 Provider 的 `base_url` 改为同路径的本地地址，例如 `http://127.0.0.1:17891/api`。
-4. 创建 LaunchAgent，在登录后自动启动兼容代理。
-5. 清除旧版补丁留下的 `CODEX_CLI_PATH`。
-
-状态文件位于：
-
-```text
-~/.local/share/codex-imagegen-patch/state.json
-```
-
-状态文件只包含 Provider 名称、原始上游地址、桥接模型和端口，不包含 API Token。卸载时仅当当前 `base_url` 仍指向本代理才自动恢复，避免覆盖用户之后的手工配置。
-
-## 安全说明
-
-- 代理固定绑定 `127.0.0.1`，不会监听局域网或公网地址。
-- Token 仍由 Codex 管理；代理只转发请求携带的认证头，不保存、不打印请求头和正文。
-- 上游 HTTPS 证书使用 Python 标准库默认验证。
-- 安装失败或代理健康检查失败时，安装器会尝试恢复原始 `base_url`。
-- App Bundle、Apple 签名和自动更新保持不变。
+原生实现位于 `App/`，测试位于 `AppTests/`。Python 代理和原安装器保留为 legacy fallback。
 
 ## 当前限制
 
-- 支持 JSON/SSE 形式的 Responses HTTP API。
-- 不代理 Responses WebSocket；当前中转站需支持 Codex 的 HTTP Responses 模式。
-- `images/edits` 会把输入图片作为 Responses 输入图片转发，具体编辑能力取决于中转站实现。
-- 当前安装器面向 macOS，并要求系统可用 Python 3。
-
-## 开发与测试
-
-项目只使用 Python 标准库：
-
-```bash
-/usr/bin/python3 -m unittest -v tests.test_proxy
-bash -n install-codex-imagegen-patch.sh
-```
-
-代理实现位于 `proxy/codex_imagegen_proxy.py`。
+- 上游需支持 HTTP Responses API 和托管 `image_generation` 工具。
+- 普通 Responses WebSocket 不经过本代理转换。
+- `images/edits` 的实际编辑能力取决于中转站实现。
+- 当前公开包为 ad-hoc 签名；Developer ID 签名与公证将在后续版本提供。
 
 ## 相关上游
 
