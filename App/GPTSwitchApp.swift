@@ -8,7 +8,11 @@ struct GPTSwitchApp: App {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            Label("GPTSwitch", systemImage: model.status.symbolName)
+            HStack(spacing: 4) {
+                MenuBarStatusIcon(status: model.status)
+                Text("GPTSwitch")
+            }
+            .accessibilityLabel("GPTSwitch，\(model.status.title)")
         }
 
         Settings {
