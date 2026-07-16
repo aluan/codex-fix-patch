@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        python-version: ["3.9", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Validate Python
+        run: |
+          python3 -m py_compile proxy/codex_imagegen_proxy.py tests/test_proxy.py
+          python3 -m unittest -v tests.test_proxy
+      - name: Validate installer syntax
+        run: bash -n install-codex-imagegen-patch.sh

@@ -1,9 +1,0 @@
-4074160e8c1b1157ba922dc3cfc9374a59976160e4e8cfc62f13c0ae0acfe226  bin/codex
-4419da981733e344b4da1fe57f5e25462bdaaefd841ff76ca12c78de8f13cffc  codex-0.144.2-aarch64-apple-darwin.gz
-
-Build metadata:
-- Tool version: 1.0.0
-- Codex source tag: rust-v0.144.2
-- Codex CLI version: 0.144.2
-- Target: aarch64-apple-darwin
-- Rust: 1.95.0 (59807616e 2026-04-14)

@@ -2,30 +2,29 @@
 
 set -euo pipefail
 
-TOOL_VERSION="1.0.0"
-TARGET_CLI_VERSION="0.144.2"
-TARGET_ARCH="arm64"
-PATCHED_BINARY_SHA256="4074160e8c1b1157ba922dc3cfc9374a59976160e4e8cfc62f13c0ae0acfe226"
-BINARY_ARCHIVE_SHA256="4419da981733e344b4da1fe57f5e25462bdaaefd841ff76ca12c78de8f13cffc"
-BINARY_ASSET_NAME="codex-${TARGET_CLI_VERSION}-aarch64-apple-darwin.gz"
-BINARY_ASSET_URL="https://github.com/aluan/codex-fix-patch/releases/download/v${TOOL_VERSION}/${BINARY_ASSET_NAME}"
+TOOL_VERSION="1.1.0"
+DEFAULT_PORT="17891"
 LAUNCH_AGENT_LABEL="com.local.codex-imagegen-patch"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PACKAGED_BINARY="$SCRIPT_DIR/bin/codex"
-CACHE_DIR="${CODEX_IMAGEGEN_PATCH_CACHE:-$HOME/Library/Caches/codex-imagegen-patch}"
+SOURCE_PROXY="$SCRIPT_DIR/proxy/codex_imagegen_proxy.py"
 INSTALL_ROOT="${CODEX_IMAGEGEN_PATCH_ROOT:-$HOME/.local/share/codex-imagegen-patch}"
-INSTALL_DIR="$INSTALL_ROOT/$TARGET_CLI_VERSION"
-INSTALLED_BINARY="$INSTALL_DIR/codex"
+INSTALL_DIR="$INSTALL_ROOT/$TOOL_VERSION"
+INSTALLED_PROXY="$INSTALL_DIR/codex_imagegen_proxy.py"
+STATE_PATH="$INSTALL_ROOT/state.json"
+CODEX_CONFIG="${CODEX_IMAGEGEN_CONFIG:-$HOME/.codex/config.toml}"
+PORT="${CODEX_IMAGEGEN_PROXY_PORT:-$DEFAULT_PORT}"
+BRIDGE_MODEL="${CODEX_IMAGEGEN_BRIDGE_MODEL:-}"
 LAUNCH_AGENT_PATH="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
 LAUNCHER_DIR="$HOME/Applications"
 LAUNCHER_PATH="$LAUNCHER_DIR/Launch ChatGPT with ImageGen Patch.command"
+LOG_DIR="$HOME/Library/Logs/codex-imagegen-patch"
 APP_PATH="${CODEX_IMAGEGEN_APP_PATH:-}"
+PYTHON_BIN=""
 ACTION="install"
 DRY_RUN=0
 ASSUME_YES=0
 TEST_IMAGE=0
-TEMP_DIR=""
 
 log() {
   printf '[codex-imagegen-patch] %s\n' "$*"
@@ -42,21 +41,23 @@ die() {
 
 usage() {
   cat <<EOF
-Codex Latest ImageGen Patch $TOOL_VERSION
+Codex ImageGen Compatibility Proxy $TOOL_VERSION
 
-为最新版 ChatGPT/Codex App 恢复第三方中转站 Responses 托管生图。
-不修改 App Bundle，不安装第二个 App。
+通过仅监听本机回环地址的 API 兼容代理，将新版 Images API 请求转换为
+第三方中转站支持的 Responses 托管 image_generation 调用。
 
 用法：
   $(basename "$0") [选项]
 
 选项：
   --yes              跳过安装确认
-  --dry-run          仅检查并显示将执行的操作
-  --test-image       安装后执行最小生图测试，可能消耗额度
+  --dry-run          仅检查配置，不修改任何文件
+  --test-image       安装后执行真实生图测试，可能消耗额度
   --app PATH         指定 ChatGPT/Codex App 路径
-  --status           查看补丁和版本状态
-  --uninstall        卸载补丁并恢复默认后端
+  --port PORT        指定本地代理端口，默认 $DEFAULT_PORT
+  --bridge-model ID  指定执行 Responses 托管生图的模型
+  --status           查看代理、配置和旧 CLI 覆盖状态
+  --uninstall        停止代理并恢复原始中转站 base_url
   -h, --help         显示帮助
 EOF
 }
@@ -80,6 +81,16 @@ while [ "$#" -gt 0 ]; do
       APP_PATH="$2"
       shift 2
       ;;
+    --port)
+      [ "$#" -ge 2 ] || die "--port 缺少端口"
+      PORT="$2"
+      shift 2
+      ;;
+    --bridge-model)
+      [ "$#" -ge 2 ] || die "--bridge-model 缺少模型 ID"
+      BRIDGE_MODEL="$2"
+      shift 2
+      ;;
     --status)
       ACTION="status"
       shift
@@ -98,25 +109,29 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-require_macos_arm64() {
-  [ "$(uname -s)" = "Darwin" ] || die "当前工具仅支持 macOS"
-  [ "$(uname -m)" = "$TARGET_ARCH" ] || die "当前补丁仅支持 Apple Silicon (arm64)"
+require_macos() {
+  [ "$(uname -s)" = "Darwin" ] || die "当前安装器仅支持 macOS"
+}
+
+find_python() {
+  local candidate
+  for candidate in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if [ -x "$candidate" ]; then
+      PYTHON_BIN="$candidate"
+      return
+    fi
+  done
+  command -v python3 >/dev/null 2>&1 || die "未找到 Python 3"
+  PYTHON_BIN="$(command -v python3)"
 }
 
 require_commands() {
   local command_name
-  for command_name in awk codesign curl gzip install launchctl open osascript plutil ps shasum xattr; do
+  for command_name in codesign curl install launchctl open osascript plutil ps; do
     command -v "$command_name" >/dev/null 2>&1 || die "缺少系统命令：$command_name"
   done
+  find_python
 }
-
-cleanup() {
-  if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
-    rm -rf "$TEMP_DIR"
-  fi
-}
-
-trap cleanup EXIT
 
 find_app() {
   if [ -n "$APP_PATH" ]; then
@@ -142,52 +157,34 @@ bundled_cli_path() {
 }
 
 cli_version() {
-  local binary="$1"
-  "$binary" --version 2>/dev/null | awk '{print $2}'
+  "$(bundled_cli_path)" --version 2>/dev/null | awk '{print $2}'
 }
 
 verify_app() {
-  local app_cli
-  local actual_version
-  app_cli="$(bundled_cli_path)"
-  [ -x "$app_cli" ] || die "App 未包含可执行 Codex CLI：$app_cli"
+  [ -x "$(bundled_cli_path)" ] || die "App 未包含可执行 Codex CLI"
   codesign --verify --deep --strict "$APP_PATH" >/dev/null 2>&1 || die "App 代码签名校验失败"
-  actual_version="$(cli_version "$app_cli")"
-  [ "$actual_version" = "$TARGET_CLI_VERSION" ] || die "App 内置 CLI 为 $actual_version，补丁目标为 $TARGET_CLI_VERSION；请使用对应版本补丁"
 }
 
-file_sha256() {
-  shasum -a 256 "$1" | awk '{print $1}'
+verify_port() {
+  case "$PORT" in
+    ''|*[!0-9]*) die "代理端口必须是数字" ;;
+  esac
+  [ "$PORT" -ge 1024 ] && [ "$PORT" -le 65535 ] || die "代理端口必须在 1024 到 65535 之间"
 }
 
-prepare_packaged_binary() {
-  if [ -x "$PACKAGED_BINARY" ]; then
-    return
+inspect_configuration() {
+  if [ -f "$STATE_PATH" ]; then
+    if "$PYTHON_BIN" "$SOURCE_PROXY" config-status --state "$STATE_PATH" >/dev/null 2>&1; then
+      "$PYTHON_BIN" "$SOURCE_PROXY" print-state --state "$STATE_PATH"
+      return
+    fi
+    die "发现已有代理状态，但 Codex 配置与之不一致；请先运行 --uninstall"
   fi
-
-  local archive_path="$CACHE_DIR/$BINARY_ASSET_NAME"
-  mkdir -p "$CACHE_DIR"
-  if [ ! -f "$archive_path" ] || [ "$(file_sha256 "$archive_path")" != "$BINARY_ARCHIVE_SHA256" ]; then
-    rm -f "$archive_path"
-    log "正在从 GitHub Release 下载补丁后端"
-    curl -fL --retry 3 --retry-delay 2 --progress-bar "$BINARY_ASSET_URL" -o "$archive_path"
+  local args=(config-inspect --config "$CODEX_CONFIG" --port "$PORT")
+  if [ -n "$BRIDGE_MODEL" ]; then
+    args+=(--bridge-model "$BRIDGE_MODEL")
   fi
-  [ "$(file_sha256 "$archive_path")" = "$BINARY_ARCHIVE_SHA256" ] || die "下载资源 SHA-256 校验失败"
-
-  TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-imagegen-patch.XXXXXX")"
-  PACKAGED_BINARY="$TEMP_DIR/codex"
-  gzip -dc "$archive_path" > "$PACKAGED_BINARY"
-  chmod 755 "$PACKAGED_BINARY"
-}
-
-verify_packaged_binary() {
-  local actual_hash
-  [ -x "$PACKAGED_BINARY" ] || die "补丁包缺少可执行文件：$PACKAGED_BINARY"
-  [ "$PATCHED_BINARY_SHA256" != "__PATCHED_SHA256__" ] || die "补丁包尚未写入二进制校验值"
-  actual_hash="$(file_sha256 "$PACKAGED_BINARY")"
-  [ "$actual_hash" = "$PATCHED_BINARY_SHA256" ] || die "补丁二进制 SHA-256 校验失败"
-  [ "$(cli_version "$PACKAGED_BINARY")" = "$TARGET_CLI_VERSION" ] || die "补丁二进制版本不匹配"
-  codesign --verify --strict "$PACKAGED_BINARY" >/dev/null 2>&1 || die "补丁二进制签名校验失败"
+  "$PYTHON_BIN" "$SOURCE_PROXY" "${args[@]}"
 }
 
 is_app_running() {
@@ -203,11 +200,12 @@ confirm_install() {
   cat <<EOF
 
 即将执行：
-  1. 校验 App 签名、CLI 版本和补丁 SHA-256
-  2. 安装外置后端到：$INSTALLED_BINARY
-  3. 设置 CODEX_CLI_PATH，不修改 App Bundle
-  4. 创建登录自动激活项和备用启动器
+  1. 备份 $CODEX_CONFIG
+  2. 将当前 Provider 的 base_url 改为 http://127.0.0.1:$PORT
+  3. 安装本地兼容代理并创建登录自动启动项
+  4. 清除旧版 CODEX_CLI_PATH，继续使用 App 自带最新版 CLI
 
+代理只监听 127.0.0.1，不保存 Token，不记录请求正文。
 继续？[y/N]
 EOF
   read -r answer
@@ -217,103 +215,167 @@ EOF
   esac
 }
 
-install_binary() {
+install_proxy() {
+  [ -f "$SOURCE_PROXY" ] || die "补丁包缺少代理程序：$SOURCE_PROXY"
   mkdir -p "$INSTALL_DIR"
   chmod 700 "$INSTALL_ROOT" "$INSTALL_DIR"
-  install -m 755 "$PACKAGED_BINARY" "$INSTALLED_BINARY"
-  xattr -d com.apple.quarantine "$INSTALLED_BINARY" 2>/dev/null || true
-  [ "$(file_sha256 "$INSTALLED_BINARY")" = "$PATCHED_BINARY_SHA256" ] || die "安装后的二进制校验失败"
+  install -m 755 "$SOURCE_PROXY" "$INSTALLED_PROXY"
+  "$PYTHON_BIN" -m py_compile "$INSTALLED_PROXY"
+}
+
+configure_codex() {
+  local args=(config-install --config "$CODEX_CONFIG" --state "$STATE_PATH" --port "$PORT")
+  if [ -n "$BRIDGE_MODEL" ]; then
+    args+=(--bridge-model "$BRIDGE_MODEL")
+  fi
+  "$PYTHON_BIN" "$INSTALLED_PROXY" "${args[@]}"
+}
+
+restore_codex_config() {
+  local proxy="$INSTALLED_PROXY"
+  [ -f "$proxy" ] || proxy="$SOURCE_PROXY"
+  if [ -f "$proxy" ] && [ -f "$STATE_PATH" ]; then
+    "$PYTHON_BIN" "$proxy" config-uninstall --state "$STATE_PATH"
+  fi
 }
 
 install_launch_agent() {
-  mkdir -p "$(dirname "$LAUNCH_AGENT_PATH")"
+  mkdir -p "$(dirname "$LAUNCH_AGENT_PATH")" "$LOG_DIR"
   rm -f "$LAUNCH_AGENT_PATH"
   plutil -create xml1 "$LAUNCH_AGENT_PATH"
   plutil -insert Label -string "$LAUNCH_AGENT_LABEL" "$LAUNCH_AGENT_PATH"
   plutil -insert ProgramArguments -xml '<array/>' "$LAUNCH_AGENT_PATH"
-  plutil -insert ProgramArguments.0 -string /bin/launchctl "$LAUNCH_AGENT_PATH"
-  plutil -insert ProgramArguments.1 -string setenv "$LAUNCH_AGENT_PATH"
-  plutil -insert ProgramArguments.2 -string CODEX_CLI_PATH "$LAUNCH_AGENT_PATH"
-  plutil -insert ProgramArguments.3 -string "$INSTALLED_BINARY" "$LAUNCH_AGENT_PATH"
+  plutil -insert ProgramArguments.0 -string "$PYTHON_BIN" "$LAUNCH_AGENT_PATH"
+  plutil -insert ProgramArguments.1 -string "$INSTALLED_PROXY" "$LAUNCH_AGENT_PATH"
+  plutil -insert ProgramArguments.2 -string serve "$LAUNCH_AGENT_PATH"
+  plutil -insert ProgramArguments.3 -string --state "$LAUNCH_AGENT_PATH"
+  plutil -insert ProgramArguments.4 -string "$STATE_PATH" "$LAUNCH_AGENT_PATH"
   plutil -insert RunAtLoad -bool true "$LAUNCH_AGENT_PATH"
+  plutil -insert KeepAlive -bool true "$LAUNCH_AGENT_PATH"
+  plutil -insert ProcessType -string Background "$LAUNCH_AGENT_PATH"
+  plutil -insert StandardOutPath -string "$LOG_DIR/proxy.log" "$LAUNCH_AGENT_PATH"
+  plutil -insert StandardErrorPath -string "$LOG_DIR/proxy.log" "$LAUNCH_AGENT_PATH"
   plutil -lint "$LAUNCH_AGENT_PATH" >/dev/null
   launchctl bootout "gui/$(id -u)/$LAUNCH_AGENT_LABEL" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT_PATH"
-  launchctl setenv CODEX_CLI_PATH "$INSTALLED_BINARY"
+}
+
+health_url() {
+  printf 'http://127.0.0.1:%s/_codex_imagegen_patch/health' "$PORT"
+}
+
+wait_for_health() {
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if curl -fsS --max-time 2 "$(health_url)" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 create_launcher() {
   local quoted_app
-  local quoted_binary
+  local quoted_health
   quoted_app="$(printf '%q' "$APP_PATH")"
-  quoted_binary="$(printf '%q' "$INSTALLED_BINARY")"
+  quoted_health="$(printf '%q' "$(health_url)")"
   mkdir -p "$LAUNCHER_DIR"
   cat > "$LAUNCHER_PATH" <<EOF
 #!/bin/zsh
 set -eu
 app_path=$quoted_app
-patched_cli=$quoted_binary
-if ps -axo command= | awk -v prefix="\$app_path/Contents/MacOS/" 'index(\$0, prefix) == 1 { found = 1 } END { exit !found }'; then
-  osascript -e 'display dialog "请先按 Command+Q 完全退出 ChatGPT/Codex，再使用补丁启动器。" buttons {"好"} default button "好" with icon caution'
+health_url=$quoted_health
+if ! /usr/bin/curl -fsS --max-time 2 "\$health_url" >/dev/null; then
+  /usr/bin/osascript -e 'display dialog "生图兼容代理尚未就绪，请运行安装器的 --status 检查。" buttons {"好"} default button "好" with icon caution'
   exit 1
 fi
-open -na "\$app_path" --env "CODEX_CLI_PATH=\$patched_cli"
+/usr/bin/open -a "\$app_path"
 EOF
   chmod 755 "$LAUNCHER_PATH"
 }
 
+remove_legacy_cli_override() {
+  launchctl unsetenv CODEX_CLI_PATH >/dev/null 2>&1 || true
+}
+
+remove_legacy_cli_payloads() {
+  local legacy_dir
+  for legacy_dir in "$INSTALL_ROOT"/0.*; do
+    [ -d "$legacy_dir" ] || continue
+    rm -rf "$legacy_dir"
+  done
+}
+
 print_status() {
   local app_version="未找到"
-  local installed_version="未安装"
-  local installed_hash="未安装"
-  local active_path
+  local active_cli_path
+  local config_ok=0
+  local proxy_ok=0
+  if [ -f "$STATE_PATH" ]; then
+    PORT="$("$PYTHON_BIN" - "$STATE_PATH" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["port"])
+PY
+)"
+  fi
   find_app
   if [ -x "$(bundled_cli_path)" ]; then
-    app_version="$(cli_version "$(bundled_cli_path)")"
+    app_version="$(cli_version)"
   fi
-  if [ -x "$INSTALLED_BINARY" ]; then
-    installed_version="$(cli_version "$INSTALLED_BINARY")"
-    installed_hash="$(file_sha256 "$INSTALLED_BINARY")"
+  active_cli_path="$(launchctl getenv CODEX_CLI_PATH 2>/dev/null || true)"
+  if [ -f "$INSTALLED_PROXY" ] && [ -f "$STATE_PATH" ]; then
+    if "$PYTHON_BIN" "$INSTALLED_PROXY" config-status --state "$STATE_PATH" >/dev/null 2>&1; then
+      config_ok=1
+    fi
   fi
-  active_path="$(launchctl getenv CODEX_CLI_PATH 2>/dev/null || true)"
+  if curl -fsS --max-time 2 "$(health_url)" >/dev/null 2>&1; then
+    proxy_ok=1
+  fi
   cat <<EOF
 App:                 $APP_PATH
-App CLI:             $app_version
-补丁目标 CLI:        $TARGET_CLI_VERSION
-补丁路径:            $INSTALLED_BINARY
-已安装补丁 CLI:      $installed_version
-已安装 SHA-256:      $installed_hash
-当前 CODEX_CLI_PATH: ${active_path:-未设置}
+App CLI:             ${app_version}（不再绑定补丁版本）
+代理版本:            $TOOL_VERSION
+代理程序:            $INSTALLED_PROXY
+代理状态:            $([ "$proxy_ok" -eq 1 ] && printf '正常' || printf '未运行')
+Codex 配置:          $([ "$config_ok" -eq 1 ] && printf '已指向本地代理' || printf '未配置或不一致')
+当前 CODEX_CLI_PATH: ${active_cli_path:-未设置（正确）}
 LaunchAgent:         $LAUNCH_AGENT_PATH
-备用启动器:          $LAUNCHER_PATH
+状态文件:            $STATE_PATH
 EOF
-  if [ "$app_version" != "$TARGET_CLI_VERSION" ]; then
-    warn "App CLI 与补丁版本不一致"
-    return 2
-  fi
-  if [ "$installed_hash" != "$PATCHED_BINARY_SHA256" ] || [ "$active_path" != "$INSTALLED_BINARY" ]; then
-    warn "补丁未安装、未激活或校验不一致"
+  if [ -n "$active_cli_path" ]; then
+    warn "检测到旧版 CODEX_CLI_PATH；请重新运行安装器修复"
     return 1
   fi
-  log "补丁状态正常"
+  if [ "$config_ok" -ne 1 ] || [ "$proxy_ok" -ne 1 ]; then
+    warn "代理未安装、未启动或配置不一致"
+    return 1
+  fi
+  log "补丁状态正常；未来 App 升级无需同步 CLI 补丁"
 }
 
 run_image_test() {
   [ "$TEST_IMAGE" -eq 1 ] || return
-  log "开始最小生图测试；此操作可能消耗中转站额度"
-  "$INSTALLED_BINARY" exec \
-    --ephemeral \
-    --skip-git-repo-check \
-    -C "$HOME" \
-    '请使用 Responses 内置 image_generation 工具生成一张最小测试图：白色正方形背景中央一个蓝色实心圆，无文字。成功后只回复保存路径。'
+  local output_dir="$HOME/.codex/generated_images/proxy-self-test"
+  local generated="$output_dir/test-$(date +%Y%m%d-%H%M%S).png"
+  log "开始真实生图测试；此操作可能消耗中转站额度"
+  if ! "$PYTHON_BIN" "$INSTALLED_PROXY" self-test --state "$STATE_PATH" --output "$generated" >/dev/null; then
+    warn "代理真实生图自检失败"
+    return 1
+  fi
+  [ -s "$generated" ] || die "自检未生成本地 PNG"
+  log "真实生图测试通过：$generated"
 }
 
 uninstall_patch() {
   if is_app_running; then
-    warn "ChatGPT/Codex 正在运行；卸载后请完全退出并重新打开"
+    warn "ChatGPT/Codex 正在运行；卸载后请按 Command+Q 完全退出并重新打开"
   fi
   launchctl bootout "gui/$(id -u)/$LAUNCH_AGENT_LABEL" >/dev/null 2>&1 || true
-  launchctl unsetenv CODEX_CLI_PATH >/dev/null 2>&1 || true
+  remove_legacy_cli_override
+  restore_codex_config || warn "Codex 配置未自动恢复，请检查状态文件和备份"
   rm -f "$LAUNCH_AGENT_PATH" "$LAUNCHER_PATH"
   if [ -d "$INSTALL_ROOT" ]; then
     case "$INSTALL_ROOT" in
@@ -325,39 +387,54 @@ uninstall_patch() {
         ;;
     esac
   fi
-  log "补丁已卸载，已恢复 App 内置后端"
+  log "兼容代理已卸载，Codex 已恢复原始中转站地址和 App 自带 CLI"
 }
 
-require_macos_arm64
+install_patch() {
+  verify_app
+  verify_port
+  inspect_configuration
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "检查通过；dry-run 未修改文件或系统状态"
+    exit 0
+  fi
+  confirm_install
+  install_proxy
+  configure_codex
+  if ! install_launch_agent; then
+    restore_codex_config || true
+    die "LaunchAgent 安装失败，已尝试恢复 Codex 配置"
+  fi
+  if ! wait_for_health; then
+    launchctl bootout "gui/$(id -u)/$LAUNCH_AGENT_LABEL" >/dev/null 2>&1 || true
+    restore_codex_config || true
+    die "代理启动失败，已恢复 Codex 配置；请查看 $LOG_DIR/proxy.log"
+  fi
+  remove_legacy_cli_override
+  remove_legacy_cli_payloads
+  create_launcher
+  log "版本无关的本地生图兼容代理已安装并激活"
+  if is_app_running; then
+    warn "当前 App 仍在运行；请按 Command+Q 完全退出后重新打开，无需重启电脑"
+  else
+    log "现在可以正常打开 ChatGPT/Codex；未来 App 升级无需更新 CLI 补丁"
+  fi
+  run_image_test
+}
+
+require_macos
 require_commands
+[ -f "$SOURCE_PROXY" ] || [ "$ACTION" = "uninstall" ] || die "补丁包不完整：缺少代理程序"
 
 case "$ACTION" in
   status)
     print_status
     ;;
   uninstall)
-    find_app
     uninstall_patch
     ;;
   install)
     find_app
-    verify_app
-    prepare_packaged_binary
-    verify_packaged_binary
-    confirm_install
-    if [ "$DRY_RUN" -eq 1 ]; then
-      log "检查通过；dry-run 未修改系统"
-      exit 0
-    fi
-    install_binary
-    install_launch_agent
-    create_launcher
-    log "补丁已安装并激活"
-    if is_app_running; then
-      warn "当前 App 仍在运行；请按 Command+Q 完全退出后重新打开"
-    else
-      log "现在可以从 Dock 正常打开 ChatGPT，或使用备用启动器"
-    fi
-    run_image_test
+    install_patch
     ;;
 esac
