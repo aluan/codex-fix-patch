@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct MenuBarContent: View {
+    @Environment(\.openSettings) private var openSettings
     let model: AppModel
 
     var body: some View {
@@ -24,8 +25,13 @@ struct MenuBarContent: View {
 
         Divider()
 
-        SettingsLink {
-            Text("设置…")
+        Button("设置…") {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            openSettings()
+            DispatchQueue.main.async {
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
+            AppLog.info("Opened settings window")
         }
         .keyboardShortcut(",")
 
