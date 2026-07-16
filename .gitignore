@@ -3,3 +3,5 @@ bin/codex
 __pycache__/
 *.py[cod]
 dist/
+.build/
+CodexImageGenProxy.xcodeproj/

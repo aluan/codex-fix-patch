@@ -1,0 +1,58 @@
+name: CodexImageGenProxy
+options:
+  bundleIdPrefix: com.aluan
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "26.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: targeted
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+
+targets:
+  CodexImageGenProxy:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+        excludes:
+          - Resources/Info.plist
+    info:
+      path: App/Resources/Info.plist
+      properties:
+        CFBundleShortVersionString: "1.2.0"
+        CFBundleVersion: "120"
+        LSUIElement: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aluan.CodexImageGenProxy
+        PRODUCT_NAME: Codex ImageGen Proxy
+        EXECUTABLE_NAME: CodexImageGenProxy
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 9593V6H7SN
+    scheme:
+      testTargets:
+        - CodexImageGenProxyTests
+
+  CodexImageGenProxyTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: AppTests
+    dependencies:
+      - target: CodexImageGenProxy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aluan.CodexImageGenProxyTests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Codex ImageGen Proxy.app/Contents/MacOS/CodexImageGenProxy"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 9593V6H7SN
