@@ -1,7 +1,7 @@
 import Foundation
 
 struct ProxyConfiguration: Codable, Equatable, Sendable {
-    static let currentToolVersion = "1.3.2"
+    static let currentToolVersion = "1.3.3"
 
     var toolVersion: String
     var configPath: String
