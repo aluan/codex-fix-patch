@@ -12,6 +12,11 @@ struct GPTSwitchApp: App {
             .accessibilityLabel("GPTSwitch，\(model.status.title)")
         }
 
+        Window("GPTSwitch 管理中心", id: "management") {
+            ManagementView(model: model)
+        }
+        .defaultSize(width: 980, height: 680)
+
         Settings {
             SettingsView(model: model)
         }

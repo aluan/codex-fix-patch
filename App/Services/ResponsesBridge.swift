@@ -20,11 +20,31 @@ struct ResponsesBridge: Sendable {
     struct ImageResult {
         let base64: String
         let metadata: [String: Any]
+        let observation: ResponseUsageObservation
     }
 
     func makeResponsesRequest(
         from request: IncomingHTTPRequest,
         configuration: ProxyConfiguration,
+        edit: Bool
+    ) throws -> URLRequest {
+        let profile = ProviderProfile(
+            configName: configuration.providerName,
+            displayName: configuration.providerName,
+            baseURL: configuration.upstreamBaseURL,
+            bridgeModel: configuration.bridgeModel,
+            credentialMode: .passthrough
+        )
+        return try makeResponsesRequest(
+            from: request,
+            provider: ActiveProviderSnapshot(profile: profile, bearerToken: nil),
+            edit: edit
+        )
+    }
+
+    func makeResponsesRequest(
+        from request: IncomingHTTPRequest,
+        provider: ActiveProviderSnapshot,
         edit: Bool
     ) throws -> URLRequest {
         guard let object = try JSONSerialization.jsonObject(with: request.body) as? [String: Any],
@@ -41,19 +61,20 @@ struct ResponsesBridge: Sendable {
             }
         }
         let payload: [String: Any] = [
-            "model": configuration.bridgeModel,
+            "model": provider.bridgeModel,
             "input": [["role": "user", "content": content]],
             "tools": [["type": "image_generation", "output_format": "png"]],
             "tool_choice": ["type": "image_generation"],
             "stream": false,
             "store": false,
         ]
-        let upstreamURL = try responsesURL(configuration.upstreamBaseURL)
+        let upstreamURL = try responsesURL(provider.upstreamBaseURL)
         var upstreamRequest = URLRequest(url: upstreamURL)
         upstreamRequest.httpMethod = "POST"
         upstreamRequest.timeoutInterval = 600
         upstreamRequest.httpBody = try JSONSerialization.data(withJSONObject: payload)
         copyForwardableHeaders(from: request, to: &upstreamRequest)
+        ProviderRequestAuthorizer.apply(provider, to: &upstreamRequest)
         upstreamRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         upstreamRequest.setValue("application/json", forHTTPHeaderField: "Accept")
         upstreamRequest.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
@@ -67,7 +88,11 @@ struct ResponsesBridge: Sendable {
               !result.isEmpty else {
             throw ResponsesBridgeError.missingImageResult
         }
-        return ImageResult(base64: result, metadata: call)
+        return ImageResult(
+            base64: result,
+            metadata: call,
+            observation: UsageExtractor.observation(from: root)
+        )
     }
 
     func makeImagesResponse(

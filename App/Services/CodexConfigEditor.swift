@@ -7,6 +7,16 @@ struct ConfigInspection: Equatable, Sendable {
     let baseURL: String
 }
 
+struct ProviderConfigInspection: Equatable, Sendable {
+    let configName: String
+    let displayName: String
+    let baseURL: String
+    let bearerToken: String?
+    let environmentKey: String?
+    let isCurrent: Bool
+    let model: String
+}
+
 enum ConfigEditorError: LocalizedError {
     case missingConfig(String)
     case missingTopLevelKey(String)
@@ -53,6 +63,49 @@ struct CodexConfigEditor: Sendable {
         )
     }
 
+    func inspectProviders(
+        at url: URL = AppPaths.codexConfig,
+        originalConfiguration: ProxyConfiguration? = nil
+    ) throws -> [ProviderConfigInspection] {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw ConfigEditorError.missingConfig(url.path)
+        }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let lines = text.components(separatedBy: "\n")
+        let currentProvider = try topLevelString(lines: lines, key: "model_provider")
+        let model = try topLevelString(lines: lines, key: "model")
+        var output: [ProviderConfigInspection] = []
+        for sectionStart in lines.indices {
+            guard let configName = providerSectionName(lines[sectionStart]) else { continue }
+            var values: [String: String] = [:]
+            for index in lines.indices where index > sectionStart {
+                let line = lines[index]
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("[") { break }
+                for key in ["name", "base_url", "experimental_bearer_token", "env_key"] {
+                    if let assignment = assignment(line, key: key),
+                       let value = try? parseTOMLString(assignment.value, key: key) {
+                        values[key] = value
+                    }
+                }
+            }
+            guard var baseURL = values["base_url"], !baseURL.isEmpty else { continue }
+            let isCurrent = configName == currentProvider
+            if isCurrent, let originalConfiguration {
+                baseURL = originalConfiguration.upstreamBaseURL
+            }
+            output.append(ProviderConfigInspection(
+                configName: configName,
+                displayName: values["name"]?.nilIfEmpty ?? configName,
+                baseURL: baseURL,
+                bearerToken: values["experimental_bearer_token"]?.nilIfEmpty,
+                environmentKey: values["env_key"]?.nilIfEmpty,
+                isCurrent: isCurrent,
+                model: isCurrent ? (originalConfiguration?.bridgeModel ?? model) : model
+            ))
+        }
+        return output
+    }
+
     func enable(
         at configURL: URL = AppPaths.codexConfig,
         port: UInt16,
@@ -78,12 +131,29 @@ struct CodexConfigEditor: Sendable {
         )
     }
 
+    func activate(_ configuration: ProxyConfiguration) throws {
+        let configURL = URL(fileURLWithPath: configuration.configPath)
+        let parsed = try parse(configURL)
+        let current = normalizedBaseURL(parsed.baseURL)
+        let local = normalizedBaseURL(configuration.localBaseURL)
+        guard current != local else { return }
+        guard current == normalizedBaseURL(configuration.upstreamBaseURL) else {
+            throw ConfigEditorError.configurationChanged(parsed.baseURL)
+        }
+        try replaceBaseURL(
+            in: configURL,
+            parsed: parsed,
+            replacement: configuration.localBaseURL
+        )
+    }
+
     func restore(_ configuration: ProxyConfiguration) throws {
         let configURL = URL(fileURLWithPath: configuration.configPath)
         let parsed = try parse(configURL)
-        let current = parsed.baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let expected = configuration.localBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard current == expected else {
+        let current = normalizedBaseURL(parsed.baseURL)
+        let upstream = normalizedBaseURL(configuration.upstreamBaseURL)
+        guard current != upstream else { return }
+        guard current == normalizedBaseURL(configuration.localBaseURL) else {
             throw ConfigEditorError.configurationChanged(parsed.baseURL)
         }
         try replaceBaseURL(
@@ -264,6 +334,10 @@ struct CodexConfigEditor: Sendable {
 
     private func normalizedModel(_ model: String?) -> String? {
         model?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+
+    private func normalizedBaseURL(_ value: String) -> String {
+        value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 }
 

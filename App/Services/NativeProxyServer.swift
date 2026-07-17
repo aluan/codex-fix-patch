@@ -2,24 +2,27 @@ import Foundation
 import Network
 
 final class NativeProxyServer: @unchecked Sendable {
-    private let configuration: ProxyConfiguration
+    private let installConfiguration: ProxyConfiguration
+    private let providerRouter: ActiveProviderRouter
     private let queue = DispatchQueue(label: "com.aluan.CodexImageGenProxy.server", qos: .userInitiated)
-    private let eventHandler: @Sendable (ProxyEvent) -> Void
+    private let eventHandler: @Sendable (RequestMetric) -> Void
     private let stateHandler: @Sendable (Result<Void, Error>) -> Void
     private var listener: NWListener?
 
     init(
         configuration: ProxyConfiguration,
-        eventHandler: @escaping @Sendable (ProxyEvent) -> Void,
+        providerRouter: ActiveProviderRouter,
+        eventHandler: @escaping @Sendable (RequestMetric) -> Void,
         stateHandler: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
-        self.configuration = configuration
+        installConfiguration = configuration
+        self.providerRouter = providerRouter
         self.eventHandler = eventHandler
         self.stateHandler = stateHandler
     }
 
     func start() throws {
-        guard let port = NWEndpoint.Port(rawValue: configuration.port) else {
+        guard let port = NWEndpoint.Port(rawValue: installConfiguration.port) else {
             throw URLError(.badURL)
         }
         let parameters = NWParameters.tcp
@@ -62,13 +65,15 @@ final class NativeProxyServer: @unchecked Sendable {
     }
 
     private func handle(_ request: IncomingHTTPRequest, connection: NWConnection) {
+        let provider = providerRouter.snapshot()
         if request.path == "/_codex_imagegen_patch/health" {
             HTTPResponseWriter.sendJSON(
                 status: 200,
                 object: [
                     "ok": true,
                     "tool_version": ProxyConfiguration.currentToolVersion,
-                    "bridge_model": configuration.bridgeModel,
+                    "bridge_model": provider.bridgeModel,
+                    "provider": provider.profile.displayName,
                 ],
                 to: connection
             )
@@ -76,30 +81,38 @@ final class NativeProxyServer: @unchecked Sendable {
         }
         let normalizedPath = request.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if normalizedPath.hasSuffix("images/generations") {
-            bridge(request, edit: false, connection: connection)
+            bridge(request, provider: provider, edit: false, connection: connection)
         } else if normalizedPath.hasSuffix("images/edits") {
-            bridge(request, edit: true, connection: connection)
+            bridge(request, provider: provider, edit: true, connection: connection)
         } else {
-            forward(request, connection: connection)
+            forward(request, provider: provider, connection: connection)
         }
     }
 
-    private func bridge(_ request: IncomingHTTPRequest, edit: Bool, connection: NWConnection) {
+    private func bridge(
+        _ request: IncomingHTTPRequest,
+        provider: ActiveProviderSnapshot,
+        edit: Bool,
+        connection: NWConnection
+    ) {
+        let startedAt = Date()
+        let requestMetadata = UsageExtractor.requestMetadata(from: request.body)
         Task {
+            var upstreamStatus: Int?
             do {
                 let bridge = ResponsesBridge()
                 let upstreamRequest = try bridge.makeResponsesRequest(
                     from: request,
-                    configuration: configuration,
+                    provider: provider,
                     edit: edit
                 )
                 let (data, response) = try await URLSession.shared.data(for: upstreamRequest)
                 guard let response = response as? HTTPURLResponse else {
                     throw ResponsesBridgeError.invalidUpstreamResponse
                 }
+                upstreamStatus = response.statusCode
                 guard (200..<300).contains(response.statusCode) else {
-                    let message = String(data: data.prefix(2_000), encoding: .utf8) ?? "未知上游错误"
-                    throw ResponsesBridgeError.upstreamFailure(response.statusCode, message)
+                    throw ResponsesBridgeError.upstreamFailure(response.statusCode, "上游请求失败")
                 }
                 let result = try bridge.parseImageResult(
                     data: data,
@@ -112,40 +125,92 @@ final class NativeProxyServer: @unchecked Sendable {
                     body: output,
                     to: connection
                 )
-                eventHandler(.imageBridged)
+                eventHandler(makeMetric(
+                    startedAt: startedAt,
+                    provider: provider,
+                    endpoint: edit ? .imageEdit : .imageGeneration,
+                    requestMetadata: requestMetadata,
+                    observation: result.observation,
+                    statusCode: response.statusCode,
+                    imageCount: 1,
+                    errorCategory: nil
+                ))
             } catch {
                 HTTPResponseWriter.error(status: 502, message: error.localizedDescription, to: connection)
-                eventHandler(.failed(error.localizedDescription))
+                eventHandler(makeMetric(
+                    startedAt: startedAt,
+                    provider: provider,
+                    endpoint: edit ? .imageEdit : .imageGeneration,
+                    requestMetadata: requestMetadata,
+                    observation: ResponseUsageObservation(),
+                    statusCode: upstreamStatus,
+                    imageCount: 0,
+                    errorCategory: errorCategory(for: error, statusCode: upstreamStatus)
+                ))
                 AppLog.error("Image bridge failed: \(error.localizedDescription)")
             }
         }
     }
 
-    private func forward(_ request: IncomingHTTPRequest, connection: NWConnection) {
+    private func forward(
+        _ request: IncomingHTTPRequest,
+        provider: ActiveProviderSnapshot,
+        connection: NWConnection
+    ) {
+        let startedAt = Date()
+        let metadata = UsageExtractor.requestMetadata(from: request.body)
+        let endpoint = requestEndpoint(for: request.path)
         do {
-            let upstreamRequest = try makeForwardRequest(request)
-            let delegate = StreamingForwardDelegate(connection: connection) { [eventHandler] result in
-                switch result {
-                case .success:
-                    eventHandler(.forwarded)
-                case .failure(let error):
-                    eventHandler(.failed(error.localizedDescription))
-                }
+            let upstreamRequest = try makeForwardRequest(request, provider: provider)
+            let delegate = StreamingForwardDelegate(
+                connection: connection,
+                provider: provider,
+                endpoint: endpoint,
+                requestMetadata: metadata,
+                startedAt: startedAt
+            ) { [eventHandler] metric in
+                eventHandler(metric)
             }
             delegate.start(request: upstreamRequest)
         } catch {
             HTTPResponseWriter.error(status: 502, message: error.localizedDescription, to: connection)
-            eventHandler(.failed(error.localizedDescription))
+            eventHandler(makeMetric(
+                startedAt: startedAt,
+                provider: provider,
+                endpoint: endpoint,
+                requestMetadata: metadata,
+                observation: ResponseUsageObservation(),
+                statusCode: nil,
+                imageCount: 0,
+                errorCategory: errorCategory(for: error, statusCode: nil)
+            ))
         }
     }
 
-    private func makeForwardRequest(_ request: IncomingHTTPRequest) throws -> URLRequest {
-        guard let upstream = URL(string: configuration.upstreamBaseURL),
+    private func makeForwardRequest(
+        _ request: IncomingHTTPRequest,
+        provider: ActiveProviderSnapshot
+    ) throws -> URLRequest {
+        guard let upstream = URL(string: provider.upstreamBaseURL),
               var components = URLComponents(url: upstream, resolvingAgainstBaseURL: false),
               let incoming = URLComponents(string: request.target) else {
             throw URLError(.badURL)
         }
-        components.path = incoming.path
+        let localBasePath = URL(string: installConfiguration.localBaseURL)?.path
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
+        var suffix = incoming.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if !localBasePath.isEmpty {
+            if suffix == localBasePath {
+                suffix = ""
+            } else if suffix.hasPrefix("\(localBasePath)/") {
+                suffix.removeFirst(localBasePath.count + 1)
+            }
+        }
+        let upstreamBasePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        components.path = [upstreamBasePath, suffix]
+            .filter { !$0.isEmpty }
+            .joined(separator: "/")
+        if !components.path.isEmpty { components.path = "/\(components.path)" }
         components.query = incoming.query
         guard let url = components.url else {
             throw URLError(.badURL)
@@ -161,7 +226,50 @@ final class NativeProxyServer: @unchecked Sendable {
         for (name, value) in request.headers where !excluded.contains(name.lowercased()) {
             output.setValue(value, forHTTPHeaderField: name)
         }
+        ProviderRequestAuthorizer.apply(provider, to: &output)
         return output
+    }
+
+    private func requestEndpoint(for path: String) -> RequestEndpoint {
+        let normalized = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if normalized.hasSuffix("/responses") || normalized == "responses" { return .responses }
+        if normalized.hasSuffix("/models") || normalized == "models" { return .models }
+        return .other
+    }
+
+    private func makeMetric(
+        startedAt: Date,
+        provider: ActiveProviderSnapshot,
+        endpoint: RequestEndpoint,
+        requestMetadata: RequestMetadata,
+        observation: ResponseUsageObservation,
+        statusCode: Int?,
+        imageCount: Int,
+        errorCategory: String?
+    ) -> RequestMetric {
+        let completedAt = Date()
+        return RequestMetric(
+            startedAt: startedAt,
+            completedAt: completedAt,
+            providerID: provider.id,
+            providerName: provider.profile.displayName,
+            endpoint: endpoint,
+            requestedModel: requestMetadata.model,
+            responseModel: observation.model ?? (endpoint == .imageGeneration || endpoint == .imageEdit ? provider.bridgeModel : nil),
+            statusCode: statusCode,
+            isStreaming: requestMetadata.isStreaming,
+            durationMilliseconds: Int(completedAt.timeIntervalSince(startedAt) * 1_000),
+            usage: observation.usage,
+            imageCount: imageCount,
+            errorCategory: errorCategory
+        )
+    }
+
+    private func errorCategory(for error: Error, statusCode: Int?) -> String {
+        if let statusCode { return "http_\(statusCode)" }
+        if error is URLError { return "network_error" }
+        if error is ResponsesBridgeError { return "bridge_error" }
+        return "proxy_error"
     }
 }
 
@@ -219,12 +327,30 @@ private final class ClientConnectionHandler: @unchecked Sendable {
 
 private final class StreamingForwardDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let connection: NWConnection
-    private let completion: @Sendable (Result<Void, Error>) -> Void
+    private let provider: ActiveProviderSnapshot
+    private let endpoint: RequestEndpoint
+    private let requestMetadata: RequestMetadata
+    private let startedAt: Date
+    private let completion: @Sendable (RequestMetric) -> Void
+    private let usageParser = StreamingUsageParser()
     private var session: URLSession?
     private var responseStarted = false
+    private var statusCode: Int?
+    private var firstByteAt: Date?
 
-    init(connection: NWConnection, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+    init(
+        connection: NWConnection,
+        provider: ActiveProviderSnapshot,
+        endpoint: RequestEndpoint,
+        requestMetadata: RequestMetadata,
+        startedAt: Date,
+        completion: @escaping @Sendable (RequestMetric) -> Void
+    ) {
         self.connection = connection
+        self.provider = provider
+        self.endpoint = endpoint
+        self.requestMetadata = requestMetadata
+        self.startedAt = startedAt
         self.completion = completion
     }
 
@@ -247,6 +373,8 @@ private final class StreamingForwardDelegate: NSObject, URLSessionDataDelegate, 
             completionHandler(.cancel)
             return
         }
+        statusCode = response.statusCode
+        usageParser.begin(contentType: response.value(forHTTPHeaderField: "Content-Type"))
         var header = "HTTP/1.1 \(response.statusCode) \(HTTPResponseWriter.reasonPhrase(response.statusCode))\r\n"
         let excluded = Set(["content-length", "transfer-encoding", "connection", "keep-alive"])
         for (rawName, rawValue) in response.allHeaderFields {
@@ -263,6 +391,8 @@ private final class StreamingForwardDelegate: NSObject, URLSessionDataDelegate, 
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard !data.isEmpty else { return }
+        if firstByteAt == nil { firstByteAt = Date() }
+        usageParser.consume(data)
         var chunk = Data(String(data.count, radix: 16).utf8)
         chunk.append(Data("\r\n".utf8))
         chunk.append(data)
@@ -281,16 +411,32 @@ private final class StreamingForwardDelegate: NSObject, URLSessionDataDelegate, 
             } else {
                 HTTPResponseWriter.error(status: 502, message: error.localizedDescription, to: connection)
             }
-            completion(.failure(error))
+            completion(makeMetric(errorCategory: "network_error"))
             return
         }
         connection.send(content: Data("0\r\n\r\n".utf8), contentContext: .defaultMessage, isComplete: true, completion: .contentProcessed { [completion] error in
             self.connection.cancel()
-            if let error {
-                completion(.failure(error))
-            } else {
-                completion(.success(()))
-            }
+            completion(self.makeMetric(errorCategory: error == nil ? nil : "downstream_error"))
         })
+    }
+
+    private func makeMetric(errorCategory: String?) -> RequestMetric {
+        let completedAt = Date()
+        let observation = usageParser.finish()
+        return RequestMetric(
+            startedAt: startedAt,
+            completedAt: completedAt,
+            providerID: provider.id,
+            providerName: provider.profile.displayName,
+            endpoint: endpoint,
+            requestedModel: requestMetadata.model,
+            responseModel: observation.model,
+            statusCode: statusCode,
+            isStreaming: requestMetadata.isStreaming,
+            durationMilliseconds: Int(completedAt.timeIntervalSince(startedAt) * 1_000),
+            timeToFirstByteMilliseconds: firstByteAt.map { Int($0.timeIntervalSince(startedAt) * 1_000) },
+            usage: observation.usage,
+            errorCategory: errorCategory ?? statusCode.flatMap { (200..<300).contains($0) ? nil : "http_\($0)" }
+        )
     }
 }
