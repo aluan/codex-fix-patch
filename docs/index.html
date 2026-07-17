@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="GPTSwitch 是面向 macOS Codex App 的原生 Provider 管理、生图兼容、使用统计与界面换肤工具。">
+  <meta name="theme-color" content="#f4efe6">
+  <meta property="og:title" content="GPTSwitch — 让 Codex 自由连接">
+  <meta property="og:description" content="在 Mac 本机管理 Provider、桥接 Images API、查看使用统计并为 Codex 换肤。">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="assets/gptswitch-logo.png">
+  <title>GPTSwitch — 让 Codex 自由连接</title>
+  <link rel="icon" type="image/png" href="assets/gptswitch-logo.png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <header class="site-header" data-header>
+    <div class="shell nav-wrap">
+      <a class="brand" href="#top" aria-label="GPTSwitch 首页">
+        <img src="assets/gptswitch-logo.png" alt="" width="36" height="36">
+        <span>GPTSwitch</span>
+      </a>
+
+      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="main-nav" data-menu-toggle>
+        <span></span><span></span>
+        <span class="sr-only">打开导航</span>
+      </button>
+
+      <nav class="main-nav" id="main-nav" aria-label="主导航" data-nav>
+        <a href="#features">能力</a>
+        <a href="#bridge">原理</a>
+        <a href="#themes">主题</a>
+        <a href="#security">安全</a>
+        <a class="nav-github" href="https://github.com/aluan/GPTSwitch" target="_blank" rel="noreferrer">
+          GitHub
+          <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.2 11.8 11.8 4.2M5 4h7v7"/></svg>
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-grid" aria-hidden="true"></div>
+      <div class="hero-glow hero-glow-one" aria-hidden="true"></div>
+      <div class="hero-glow hero-glow-two" aria-hidden="true"></div>
+
+      <div class="shell hero-layout">
+        <div class="hero-copy">
+          <p class="eyebrow reveal" style="--delay: 40ms">
+            <span class="pulse-dot"></span>
+            解决第三方 Provider 生图 404
+          </p>
+          <h1 class="reveal" style="--delay: 100ms">让你的 Provider，<br>在 Codex 里<span>正常生图。</span></h1>
+          <p class="hero-lede reveal" style="--delay: 180ms">
+            在 Mac 本机把 Codex 的 Images API 自动桥接到 Provider 支持的 Responses <code>image_generation</code>，再用一个原生控制台管理连接、用量与主题。
+          </p>
+          <div class="hero-actions reveal" style="--delay: 250ms">
+            <a class="button button-primary" href="https://github.com/aluan/GPTSwitch/releases/latest">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></svg>
+              下载 macOS 版
+            </a>
+            <a class="button button-secondary" href="#bridge">看看它如何工作</a>
+          </div>
+          <ul class="hero-meta reveal" style="--delay: 310ms" aria-label="系统要求与版本">
+            <li>macOS 14+</li>
+            <li>原生 Swift</li>
+            <li>开源免费</li>
+          </ul>
+        </div>
+
+        <div class="product-stage reveal" style="--delay: 190ms" aria-label="GPTSwitch 应用界面示意">
+          <div class="orbit orbit-one" aria-hidden="true"></div>
+          <div class="orbit orbit-two" aria-hidden="true"></div>
+          <div class="app-window">
+            <div class="window-bar">
+              <div class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+              <div class="window-title">
+                <img src="assets/gptswitch-logo.png" alt="" width="22" height="22">
+                <strong>GPTSwitch</strong>
+              </div>
+              <div class="proxy-switch"><span></span>代理已开启</div>
+            </div>
+            <div class="app-tabs" aria-hidden="true">
+              <span class="active">Providers</span><span>使用统计</span><span>换肤</span><span>设置</span>
+            </div>
+            <div class="app-body">
+              <div class="provider-list">
+                <div class="list-heading"><span>3 个 Provider</span><b>＋</b></div>
+                <button class="provider active" type="button" data-provider="OpenAI Relay">
+                  <i class="provider-mark orange">O</i>
+                  <span><strong>OpenAI Relay</strong><small>api.example.com</small></span>
+                  <em>当前</em>
+                </button>
+                <button class="provider" type="button" data-provider="Team Gateway">
+                  <i class="provider-mark blue">T</i>
+                  <span><strong>Team Gateway</strong><small>gateway.team.dev</small></span>
+                  <em>就绪</em>
+                </button>
+                <button class="provider" type="button" data-provider="Lab Endpoint">
+                  <i class="provider-mark dark">L</i>
+                  <span><strong>Lab Endpoint</strong><small>codex.lab.local</small></span>
+                  <em>就绪</em>
+                </button>
+              </div>
+              <div class="provider-detail">
+                <div class="detail-heading">
+                  <div><small>当前路由</small><strong data-provider-name>OpenAI Relay</strong></div>
+                  <span class="health"><i></i>运行中</span>
+                </div>
+                <div class="route-card">
+                  <div class="route-node"><span>Codex</span><small>/images</small></div>
+                  <div class="route-line"><i></i><em>桥接中</em></div>
+                  <div class="route-node route-node-accent"><span>Provider</span><small>/responses</small></div>
+                </div>
+                <div class="mini-metrics">
+                  <div><small>今日请求</small><strong>248</strong><span>+12.4%</span></div>
+                  <div><small>平均延迟</small><strong>826<em>ms</em></strong><span>稳定</span></div>
+                </div>
+                <div class="chart-card">
+                  <div class="chart-label"><span>过去 24 小时</span><strong>99.6% 成功</strong></div>
+                  <svg viewBox="0 0 420 100" preserveAspectRatio="none" role="img" aria-label="请求趋势示意图">
+                    <defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff5a1f" stop-opacity=".28"/><stop offset="1" stop-color="#ff5a1f" stop-opacity="0"/></linearGradient></defs>
+                    <path class="chart-area" d="M0,86 C35,80 45,57 78,65 S132,82 158,52 S205,48 235,56 S280,35 305,42 S352,20 420,27 L420,100 L0,100Z"/>
+                    <path class="chart-line" d="M0,86 C35,80 45,57 78,65 S132,82 158,52 S205,48 235,56 S280,35 305,42 S352,20 420,27"/>
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="floating-status">
+            <span class="status-icon"><i></i></span>
+            <span><small>Images → Responses</small><strong>生图请求转换成功</strong></span>
+            <b>42 ms</b>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="trust-strip" aria-label="产品特性摘要">
+      <div class="shell trust-grid">
+        <div><span>01</span><strong>第三方生图可用</strong><small>自动桥接 Images 与 Responses</small></div>
+        <div><span>02</span><strong>只在本机运行</strong><small>仅监听 127.0.0.1</small></div>
+        <div><span>03</span><strong>密钥进钥匙串</strong><small>不落日志与配置文件</small></div>
+        <div><span>04</span><strong>不修改 Codex</strong><small>升级后无需重新打补丁</small></div>
+      </div>
+    </section>
+
+    <section class="section features" id="features">
+      <div class="shell">
+        <div class="section-heading reveal-on-scroll">
+          <p class="kicker">一个控制台，四种能力</p>
+          <h2>先让生图跑通，<br>再把连接管好。</h2>
+          <p>GPTSwitch 解决新版 Codex 与部分 Provider 之间的生图协议缺口，并把散落在配置文件和终端里的管理操作收进原生界面。</p>
+        </div>
+
+        <div class="bento-grid">
+          <article class="feature-card feature-provider reveal-on-scroll">
+            <div class="card-copy">
+              <span class="feature-index">01 / PROVIDERS</span>
+              <h3>Provider，随手切换</h3>
+              <p>添加、复制、排序与快速切换第三方 Provider，并在切换前完成端点测速和模型自检。</p>
+            </div>
+            <div class="provider-stack" aria-hidden="true">
+              <div><i class="provider-mark orange">O</i><span><b>Production</b><small>当前连接</small></span><em></em></div>
+              <div><i class="provider-mark blue">T</i><span><b>Team Relay</b><small>延迟 612 ms</small></span><strong>⌘ 2</strong></div>
+              <div><i class="provider-mark dark">L</i><span><b>Local Lab</b><small>全部检查通过</small></span><strong>⌘ 3</strong></div>
+            </div>
+          </article>
+
+          <article class="feature-card feature-image reveal-on-scroll">
+            <div class="card-copy">
+              <span class="feature-index">02 / IMAGE BRIDGE</span>
+              <h3>生图接口，自动对上</h3>
+              <p>把 Codex 的 Images API 请求转换为 Responses 托管生图，再将结果原样交回 Codex。</p>
+            </div>
+            <div class="image-bridge-visual" aria-hidden="true">
+              <div class="api-chip chip-one"><small>POST</small><b>/images/generations</b></div>
+              <div class="bridge-core"><span></span><i></i><b>SWITCH</b></div>
+              <div class="api-chip chip-two"><small>TOOL</small><b>image_generation</b></div>
+            </div>
+          </article>
+
+          <article class="feature-card feature-usage reveal-on-scroll">
+            <div class="card-copy">
+              <span class="feature-index">03 / USAGE</span>
+              <h3>用量与成本，看得见</h3>
+              <p>按 24 小时、7 天和 30 天追踪请求、Token、延迟与估算成本。</p>
+            </div>
+            <div class="usage-visual" aria-hidden="true">
+              <div class="usage-top"><strong>12,840</strong><span>tokens today</span><em>↗ 8.2%</em></div>
+              <div class="bars"><i style="--h:38%"></i><i style="--h:58%"></i><i style="--h:46%"></i><i style="--h:72%"></i><i style="--h:64%"></i><i style="--h:91%"></i><i style="--h:76%"></i><i style="--h:98%"></i></div>
+            </div>
+          </article>
+
+          <article class="feature-card feature-skin reveal-on-scroll">
+            <div class="card-copy">
+              <span class="feature-index">04 / SKIN STUDIO</span>
+              <h3>Codex，也可以是你的</h3>
+              <p>从四款原创主题开始，或导入自己的图片自动取色。换肤不修改 App 与签名资源。</p>
+            </div>
+            <div class="skin-fan" aria-hidden="true">
+              <img src="assets/theme-ocean-glass.jpg" alt="">
+              <img src="assets/theme-sunset-atelier.jpg" alt="">
+              <img src="assets/theme-aurora-night.jpg" alt="">
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section bridge" id="bridge">
+      <div class="shell bridge-shell">
+        <div class="bridge-copy reveal-on-scroll">
+          <p class="kicker kicker-dark">本机协议桥</p>
+          <h2>Codex 说 Images，<br>Provider 听 Responses。</h2>
+          <p>GPTSwitch 站在两者之间，只转换它们没对上的那一段。普通请求透明转发，生图请求自动重组。</p>
+          <ul class="bridge-points">
+            <li><i>✓</i><span><strong>普通请求不绕路</strong><small>/responses、/models 等请求透明转发</small></span></li>
+            <li><i>✓</i><span><strong>生图请求自动适配</strong><small>/images/generations 与 /images/edits 自动转换</small></span></li>
+            <li><i>✓</i><span><strong>停用时安全恢复</strong><small>只恢复 GPTSwitch 曾改写的当前地址</small></span></li>
+          </ul>
+        </div>
+
+        <div class="route-map reveal-on-scroll" aria-label="请求路由示意图">
+          <div class="map-grid" aria-hidden="true"></div>
+          <div class="map-label label-local">LOCAL / 127.0.0.1</div>
+          <div class="map-node node-codex">
+            <span class="node-logo node-logo-dark">C</span>
+            <div><small>REQUEST FROM</small><strong>Codex App</strong></div>
+          </div>
+          <div class="map-node node-switch">
+            <img src="assets/gptswitch-logo.png" alt="" width="50" height="50">
+            <div><small>ROUTED BY</small><strong>GPTSwitch</strong></div>
+          </div>
+          <div class="map-node node-provider">
+            <span class="node-logo node-logo-orange">P</span>
+            <div><small>FORWARDED TO</small><strong>Your Provider</strong></div>
+          </div>
+          <div class="map-line line-one"><span>POST /images</span><i></i></div>
+          <div class="map-line line-two"><span>POST /responses</span><i></i></div>
+          <div class="packet packet-one"></div>
+          <div class="packet packet-two"></div>
+          <div class="bridge-note">
+            <span>↳</span>
+            <p><strong>只有协议被转换</strong><br>Prompt 与响应正文不会写入本地统计。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section themes" id="themes">
+      <div class="shell">
+        <div class="themes-heading reveal-on-scroll">
+          <div>
+            <p class="kicker">Skin Studio</p>
+            <h2>换一种气氛，<br>不换你的工作流。</h2>
+          </div>
+          <p>四款原创抽象主题，覆盖明亮与深色场景。点击选择一种主题，看看它如何改变整个工作空间。</p>
+        </div>
+
+        <div class="theme-showcase reveal-on-scroll" data-theme-showcase>
+          <div class="theme-preview" data-theme-preview>
+            <img src="assets/theme-ocean-glass.jpg" alt="海洋玻璃主题预览" data-theme-image>
+            <div class="theme-window" aria-hidden="true">
+              <div class="theme-sidebar"><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="theme-chat">
+                <span>GPTSwitch</span>
+                <div class="chat-line long"></div><div class="chat-line"></div>
+                <div class="code-panel"><i></i><i></i><i></i></div>
+                <div class="chat-input">Ask Codex anything… <b>↑</b></div>
+              </div>
+            </div>
+            <div class="theme-caption"><small>当前预览</small><strong data-theme-title>海洋玻璃</strong></div>
+          </div>
+
+          <div class="theme-selector" role="list" aria-label="选择主题预览">
+            <button class="theme-option active" type="button" data-theme-src="assets/theme-ocean-glass.jpg" data-theme-name="海洋玻璃" data-theme-alt="海洋玻璃主题预览" role="listitem">
+              <img src="assets/theme-ocean-glass.jpg" alt=""><span><strong>海洋玻璃</strong><small>清透 / 明亮</small></span><i></i>
+            </button>
+            <button class="theme-option" type="button" data-theme-src="assets/theme-aurora-night.jpg" data-theme-name="极光夜幕" data-theme-alt="极光夜幕主题预览" role="listitem">
+              <img src="assets/theme-aurora-night.jpg" alt=""><span><strong>极光夜幕</strong><small>流光 / 深色</small></span><i></i>
+            </button>
+            <button class="theme-option" type="button" data-theme-src="assets/theme-sunset-atelier.jpg" data-theme-name="日落画室" data-theme-alt="日落画室主题预览" role="listitem">
+              <img src="assets/theme-sunset-atelier.jpg" alt=""><span><strong>日落画室</strong><small>温暖 / 柔和</small></span><i></i>
+            </button>
+            <button class="theme-option" type="button" data-theme-src="assets/theme-deep-space.jpg" data-theme-name="深空星云" data-theme-alt="深空星云主题预览" role="listitem">
+              <img src="assets/theme-deep-space.jpg" alt=""><span><strong>深空星云</strong><small>沉浸 / 静谧</small></span><i></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section security" id="security">
+      <div class="shell security-layout">
+        <div class="security-mark reveal-on-scroll" aria-hidden="true">
+          <div class="lock-orbit"><i></i><i></i><i></i></div>
+          <svg viewBox="0 0 100 116"><path d="M50 4 92 20v31c0 27-17 49-42 61C25 100 8 78 8 51V20L50 4Z"/><path d="m31 56 12 12 27-29"/></svg>
+          <span>LOCAL<br>ONLY</span>
+        </div>
+        <div class="security-copy reveal-on-scroll">
+          <p class="kicker">隐私是默认值</p>
+          <h2>密钥锁在钥匙串，<br>流量留在你的掌控里。</h2>
+          <p>GPTSwitch 只监听本机回环地址。由它管理的 API Key 保存在 macOS 钥匙串，请求正文和 Token 不进入数据库或日志。</p>
+          <div class="security-grid">
+            <div><span>127.0.0.1</span><strong>本地监听</strong><small>不会暴露到局域网或公网</small></div>
+            <div><span>KEYCHAIN</span><strong>系统级存储</strong><small>密钥不写入 Codex 配置</small></div>
+            <div><span>METADATA</span><strong>最小化统计</strong><small>只记录模型、状态、Token 与耗时</small></div>
+            <div><span>REVERSIBLE</span><strong>随时可恢复</strong><small>停用后安全还原上游地址</small></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section install" id="install">
+      <div class="shell">
+        <div class="install-heading reveal-on-scroll">
+          <p class="kicker">三步开始</p>
+          <h2>从下载到连接，<br>只需要一杯咖啡的时间。</h2>
+        </div>
+        <ol class="install-steps">
+          <li class="reveal-on-scroll"><span>01</span><div><strong>下载 GPTSwitch</strong><p>从 GitHub Releases 获取最新版 DMG 或 ZIP。</p></div><i>↓</i></li>
+          <li class="reveal-on-scroll"><span>02</span><div><strong>拖入应用程序</strong><p>首次打开后，从菜单栏进入统一控制台。</p></div><i>→</i></li>
+          <li class="reveal-on-scroll"><span>03</span><div><strong>选择 Provider</strong><p>填写上游地址和密钥，应用并启动即可。</p></div><i>✓</i></li>
+        </ol>
+        <div class="compat-note reveal-on-scroll">
+          <span>系统要求</span>
+          <strong>macOS 14 Sonoma 或更高版本</strong>
+          <small>当前公开包使用 ad-hoc 签名，首次打开时可能需要在 Finder 中右键选择“打开”。</small>
+        </div>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <div class="cta-grid" aria-hidden="true"></div>
+      <div class="shell final-cta-inner reveal-on-scroll">
+        <img src="assets/gptswitch-logo.png" alt="GPTSwitch" width="92" height="92">
+        <p>你的 Provider，你的界面，你的 Codex。</p>
+        <h2>切换，从此简单。</h2>
+        <div class="hero-actions">
+          <a class="button button-light" href="https://github.com/aluan/GPTSwitch/releases/latest">免费下载 GPTSwitch <span>↘</span></a>
+          <a class="text-link" href="https://github.com/aluan/GPTSwitch" target="_blank" rel="noreferrer">在 GitHub 查看源码 →</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell footer-main">
+      <div class="footer-brand">
+        <a class="brand" href="#top"><img src="assets/gptswitch-logo.png" alt="" width="34" height="34"><span>GPTSwitch</span></a>
+        <p>面向 macOS Codex App 的原生 Provider 管理、生图兼容与界面换肤工具。</p>
+      </div>
+      <div class="footer-links">
+        <div><strong>产品</strong><a href="#features">核心能力</a><a href="#bridge">工作原理</a><a href="#themes">主题工作室</a></div>
+        <div><strong>资源</strong><a href="https://github.com/aluan/GPTSwitch/releases/latest">下载</a><a href="https://github.com/aluan/GPTSwitch#readme">使用文档</a><a href="https://github.com/aluan/GPTSwitch/issues">问题反馈</a></div>
+      </div>
+    </div>
+    <div class="shell footer-bottom">
+      <span>© <span data-year></span> GPTSwitch · MIT License</span>
+      <span>Built for the Mac, routed locally.</span>
+    </div>
+  </footer>
+</body>
+</html>

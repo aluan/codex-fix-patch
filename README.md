@@ -4,144 +4,78 @@
   <img src="Brand/GPTSwitchLogo.png" alt="GPTSwitch Logo" width="180">
 </p>
 
-面向 macOS Codex App 的原生 Provider 管理、生图兼容与界面换肤工具。GPTSwitch 通过本地 API 路由切换，让只支持 Responses 托管生图的中转站兼容新版 Codex Images API，并可通过本机 CDP 应用原创主题。
+<p align="center">
+  面向 macOS Codex App 的 Provider 管理、生图兼容、使用统计与界面换肤工具。
+</p>
 
-新版 Codex 会调用独立的 `POST /images/generations`，部分中转站只支持 Responses API 托管 `image_generation`，因此会返回 `404`。本工具在 Mac 本机启动一个原生 Swift 代理，自动完成 Images API 与 Responses API 之间的转换。
+<p align="center">
+  <a href="https://gptswitch-sq41818iem-88qgx8yuj6.preview.iga-pages.com/">官网</a> ·
+  <a href="https://github.com/aluan/GPTSwitch/releases/latest">下载</a>
+</p>
 
-- 不替换 Codex CLI，不修改 Codex.app。
-- Codex 升级后无需重新打补丁。
-- 只监听 `127.0.0.1`，不会暴露到局域网或公网。
-- 不保存、不打印 API Token 和请求正文。
-- 不依赖 Python 或其他运行时。
-- 换肤不修改 `ChatGPT.app`、`app.asar` 或签名资源。
+新版 Codex 使用独立的 Images API，部分第三方 Provider 只支持 Responses 托管的 `image_generation`，导致生图请求返回 `404`。GPTSwitch 在 Mac 本机启动原生 Swift 代理，自动完成两种协议之间的转换。
 
-## 安装 App
+## 功能
 
-从 [GitHub Releases](https://github.com/aluan/codex-fix-patch/releases/latest) 下载最新版 DMG 或 ZIP：
+- 将 `/images/generations`、`/images/edits` 转换为 Responses `image_generation`。
+- 添加、检测、排序和快速切换多个第三方 Provider。
+- 查看请求、Token、延迟与估算成本统计。
+- 使用四款内置主题，或导入图片自动取色并自定义 Codex 界面。
+- 停用代理时安全恢复原 Provider 地址。
 
-1. 将 `GPTSwitch.app` 拖入“应用程序”。
-2. 首次启动后，点击菜单栏图标并打开“设置”。
-3. 确认 Provider、上游地址、桥接模型和端口，点击“应用并启动”。
-4. 按 `Command + Q` 完全退出 Codex，再重新打开。无需重启电脑。
+## 安装
 
-当前 GitHub 包使用 ad-hoc 签名，尚未经过 Apple 公证。如果 macOS 阻止首次打开，可在 Finder 中右键 App 选择“打开”；仍被阻止时运行：
+要求 macOS 14 或更高版本。
+
+1. 从 [GitHub Releases](https://github.com/aluan/GPTSwitch/releases/latest) 下载 DMG 或 ZIP。
+2. 将 `GPTSwitch.app` 拖入“应用程序”。
+3. 从菜单栏打开主界面，添加 Provider 并点击“应用并启动”。
+4. 完全退出并重新打开 Codex。
+
+GPTSwitch 是菜单栏工具，不显示 Dock 图标。当前公开包使用 ad-hoc 签名；如果 macOS 阻止首次打开，可在 Finder 中右键选择“打开”，或运行：
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/GPTSwitch.app"
 open "/Applications/GPTSwitch.app"
 ```
 
-GPTSwitch 是菜单栏工具，不显示 Dock 图标。点击菜单栏中的“打开主界面”可进入统一控制台，在同一窗口管理代理、Provider、使用统计、换肤和设置。启用换肤常驻期间会保持登录启动；恢复原生界面后会还原之前的登录项状态。
-
-## 使用
-
-主界面和菜单栏提供以下操作：
-
-- 通过状态栏中的 GPTSwitch 单色 Logo 颜色查看代理运行状态。
-- 在卡片列表中添加、编辑、复制、排序和快速切换第三方 Provider。
-- 在 Provider 详情中执行端点测速、真实模型自检和生图自检。
-- 查看 24 小时、7 天和 30 天请求、Token、延迟与估算成本统计。
-- 选择四款原创皮肤，或导入本地图片并自动取色、手动微调配色。
-- 启动本地代理，或停用代理并恢复原上游地址。
-- 打开设置和运行日志。
-
-Provider 的 API Key 只保存在 macOS 钥匙串中。代理会在请求发往上游前注入密钥，数据库、日志和 Codex 配置中不会保存由 GPTSwitch 管理的 Key。
-
-## Codex 换肤
-
-在主界面顶部选择“换肤”，选中主题后点击“应用所选主题”。如果 Codex 正在运行，GPTSwitch 会先说明当前任务可能中断，得到确认后请求 Codex 正常退出，再以仅绑定 `127.0.0.1:9341` 的调试模式重新打开；不会强制结束进程。
-
-- 内置“海洋玻璃、极光夜幕、日落画室、深空星云”四款原创抽象主题。
-- 支持 PNG、JPEG、WebP；导入后自动缩放、取色，也可以调整强调色、辅色、面板色和文字色。
-- 同一换肤会话内切换主题即时生效。renderer 重载后，GPTSwitch 会自动补充注入。
-- Codex 未运行时只保存选择，不会擅自启动；下次用户正常打开 Codex 时自动应用。
-- 点击“恢复原生界面”会移除主题，并在必要时以不带调试端口的原生模式重启 Codex。
-
-换肤和 API 代理互不改写：换肤使用 `9341` 的 CDP，代理默认使用 `17891` 并只管理 `~/.codex/config.toml` 中当前 Provider 的 `base_url`。启停任一功能不会覆盖另一功能的状态。
-
-CDP 即使只监听回环地址也没有认证，同一用户权限下的其他本机进程可能访问调试端口。无需皮肤时应使用“恢复原生界面”退出该安全边界。
-
-自检图片保存在：
-
-```text
-~/.codex/generated_images/proxy-self-test/
-```
-
-自定义主题图片保存在：
-
-```text
-~/Library/Application Support/CodexImageGenProxy/skins/
-```
-
-原生 App 状态保存在：
-
-```text
-~/Library/Application Support/CodexImageGenProxy/state.json
-```
-
-`state.json` 仅用于保存代理安装与原始上游地址，确保停用时可以安全恢复；Provider、定价和请求统计保存在同目录的 `gptswitch.sqlite3`。统计只记录 Provider、模型、状态码、Token 和耗时等元数据，不保存 Prompt 或响应正文。
-
-首次升级到支持多 Provider 的版本时，GPTSwitch 会扫描 `~/.codex/config.toml` 中的全部 `[model_providers.*]` 配置。可读取的 API Key 会迁移到 macOS 钥匙串，原 Codex 配置保持不变；无法取得密钥的 Provider 会保留配置并提示补录。
-
-## Codex 升级
-
-Codex App 升级后不需要同步更新本工具。本工具不再替换 Codex 自带 CLI，只在本机处理 HTTP API 协议。
-
-只有未来 OpenAI 修改 Images API 或 Responses `image_generation` 协议时，才可能需要升级本工具。普通 Codex App 版本更新不会影响代理。
-
-换肤不修改 Codex 安装包，因此无需在升级后重新打补丁；但如果 Codex 改变 CDP 启动参数、主 renderer URL 或界面选择器，换肤功能可能需要升级 GPTSwitch。失败时只显示诊断，不会回退到修改安装包。
-
 ## 工作原理
 
-启用时，App 会备份 `~/.codex/config.toml`，只把当前 Provider 的 `base_url` 改为同路径的本机地址，例如：
+启用时，GPTSwitch 会备份 `~/.codex/config.toml`，只将当前 Provider 的 `base_url` 指向本机代理：
 
 ```text
-https://relay.example/api
-          ↓
-http://127.0.0.1:17891/api
+Codex → 127.0.0.1:17891 → Provider
 ```
 
-本地代理会：
+- `/responses`、`/models` 等普通请求透明转发。
+- Images API 请求转换为 Responses 托管生图。
+- 返回图片重新封装后交给 Codex 保存和展示。
 
-1. 将 `/responses`、`/models` 等普通请求透明转发到原中转站。
-2. 将 `/images/generations` 和 `/images/edits` 转为 Responses 托管 `image_generation`。
-3. 将返回图片重新封装为 Images API 响应，交给 Codex 保存和展示。
+Codex 升级后通常无需重新配置，因为 GPTSwitch 不替换 Codex CLI，也不修改 Codex.app。
 
-停用时，仅当当前 `base_url` 仍指向本代理，App 才会自动恢复原地址，避免覆盖之后的手工修改。
+## 安全与数据
 
-## 从旧版迁移
+- 代理只监听 `127.0.0.1`，不会暴露到局域网或公网。
+- API Key 保存在 macOS 钥匙串，不写入数据库、日志或 Codex 配置。
+- 统计仅记录 Provider、模型、状态码、Token 和耗时，不保存 Prompt 或响应正文。
+- 换肤通过本机 CDP 应用，不修改 Codex 安装包或签名资源。
 
-如果安装过 `v1.1.0` Python 代理，GPTSwitch 首次启动时会自动：
+换肤使用未认证的本机 CDP 端口 `9341`；同一用户权限下的其他本机进程可能访问该端口。不使用主题时可点击“恢复原生界面”关闭此边界。
 
-1. 导入旧状态和端口配置。
-2. 停止并移除旧 LaunchAgent。
-3. 清除旧 `CODEX_CLI_PATH` 环境变量。
-4. 在原生代理成功监听后删除旧 Python 运行文件。
+## 当前限制
 
-Codex 的 `base_url` 会保持不变，迁移过程中无需重新配置 Token。
-
-如果正在从 `v1.2.0` 的 `Codex ImageGen Proxy.app` 升级，GPTSwitch 会自动刷新登录项到新 App 路径。确认 GPTSwitch 正常运行后，可以删除旧名称的 App。
-
-## 旧版命令行安装器
-
-没有使用原生 App 时，仍可把 Python 版作为兼容后备：
-
-```bash
-./install-codex-imagegen-patch.sh
-./install-codex-imagegen-patch.sh --status
-./install-codex-imagegen-patch.sh --test-image
-./install-codex-imagegen-patch.sh --uninstall
-```
-
-原生 App 与 Python 版不要同时运行在同一个端口。推荐只使用原生 App。
+- Provider 需支持 HTTP Responses API 和托管 `image_generation`。
+- Responses WebSocket 不经过生图转换。
+- `images/edits` 的能力取决于 Provider 实现。
+- 换肤仅支持 macOS 版官方 Codex。
+- 当前公开包尚未进行 Apple 公证。
 
 ## 开发
 
-要求 macOS 14+、Xcode 26+ 和 [XcodeGen](https://github.com/yonaskolb/XcodeGen)：
+需要 Xcode 26+ 和 [XcodeGen](https://github.com/yonaskolb/XcodeGen)：
 
 ```bash
 brew install xcodegen
-swift script/generate_brand_assets.swift
 ./script/build_and_run.sh --verify
 xcodebuild test \
   -project CodexImageGenProxy.xcodeproj \
@@ -151,19 +85,12 @@ xcodebuild test \
 ./script/package_app.sh
 ```
 
-原生实现位于 `App/`，测试位于 `AppTests/`。Python 代理和原安装器保留为 legacy fallback。
+原生代码位于 `App/`，测试位于 `AppTests/`。Python 代理和命令行安装器仅作为旧版兼容后备。
 
-## 当前限制
+## 相关项目
 
-- 上游需支持 HTTP Responses API 和托管 `image_generation` 工具。
-- 普通 Responses WebSocket 不经过本代理转换。
-- `images/edits` 的实际编辑能力取决于中转站实现。
-- 当前公开包为 ad-hoc 签名；Developer ID 签名与公证将在后续版本提供。
-- 换肤当前仅支持 macOS 版官方 Codex，固定使用本机 CDP 端口 `9341`。
-- 首版不包含 Codex 内嵌主题菜单、Windows 支持或第三方主题包导入。
+- [HeiGeAi/heige-codex-skin-studio](https://github.com/HeiGeAi/heige-codex-skin-studio)
+- [OpenAI Codex PR #31596](https://github.com/openai/codex/pull/31596)
+- [OpenAI Codex Issue #30921](https://github.com/openai/codex/issues/30921)
 
-## 相关上游
-
-- [HeiGeAi/heige-codex-skin-studio](https://github.com/HeiGeAi/heige-codex-skin-studio)（MIT，CDP 换肤方案参考；未复制其角色或第三方视觉素材）
-- [PR #31596: Use the image generation extension by default](https://github.com/openai/codex/pull/31596)
-- [Issue #30921: Custom GPT endpoint cannot use Imagen](https://github.com/openai/codex/issues/30921)
+本项目采用 [MIT License](LICENSE)。
