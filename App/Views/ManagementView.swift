@@ -4,12 +4,14 @@ import SwiftUI
 enum MainSection: String, CaseIterable, Hashable, Sendable {
     case providers
     case usage
+    case skins
     case settings
 
     var title: String {
         switch self {
         case .providers: "Providers"
         case .usage: "使用统计"
+        case .skins: "换肤"
         case .settings: "设置"
         }
     }
@@ -18,6 +20,7 @@ enum MainSection: String, CaseIterable, Hashable, Sendable {
         switch self {
         case .providers: "server.rack"
         case .usage: "chart.xyaxis.line"
+        case .skins: "paintpalette"
         case .settings: "gearshape"
         }
     }
@@ -122,6 +125,8 @@ struct ManagementView: View {
                     set: { navigation.usageProviderFilter = $0 }
                 )
             )
+        case .skins:
+            SkinStudioView(model: model)
         case .settings:
             SettingsView(model: model)
         }
@@ -239,7 +244,7 @@ private struct MainControlBar: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 170)
+            .frame(width: 220)
 
             Spacer(minLength: 12)
 

@@ -41,10 +41,18 @@ struct SettingsView: View {
                 }
 
                 GroupBox("启动") {
-                    Toggle("登录后自动运行 GPTSwitch", isOn: Binding(
-                        get: { model.loginItemEnabled },
-                        set: { model.setLoginItemEnabled($0) }
-                    ))
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("登录后自动运行 GPTSwitch", isOn: Binding(
+                            get: { model.loginItemEnabled },
+                            set: { model.setLoginItemEnabled($0) }
+                        ))
+                        .disabled(model.skinEnabled)
+                        if model.skinEnabled {
+                            Text("换肤常驻期间需要保持登录启动；关闭换肤后会恢复之前的设置。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     .padding(.top, 4)
                 }
 

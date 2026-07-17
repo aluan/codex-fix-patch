@@ -7,6 +7,7 @@ enum AppPaths {
     static let applicationSupport = home.appendingPathComponent("Library/Application Support/CodexImageGenProxy")
     static let state = applicationSupport.appendingPathComponent("state.json")
     static let database = applicationSupport.appendingPathComponent("gptswitch.sqlite3")
+    static let skins = applicationSupport.appendingPathComponent("skins")
     static let logs = home.appendingPathComponent("Library/Logs/CodexImageGenProxy")
     static let logFile = logs.appendingPathComponent("app.log")
     static let generatedImages = home.appendingPathComponent(".codex/generated_images/proxy-self-test")
