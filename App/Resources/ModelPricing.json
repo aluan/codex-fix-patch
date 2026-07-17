@@ -1,0 +1,31 @@
+{
+  "version": "openai-gpt5-2025-08-07",
+  "source": "https://openai.com/index/introducing-gpt-5/",
+  "effective_at": "2025-08-07T00:00:00Z",
+  "rules": [
+    {
+      "id": "733CD99B-97F4-486E-81EE-68052089C237",
+      "pattern": "gpt-5-mini",
+      "prefix": true,
+      "input": 250000,
+      "cached_input": 25000,
+      "output": 2000000
+    },
+    {
+      "id": "CD85E8B9-207E-4AAA-8C0B-27BD8107A9FD",
+      "pattern": "gpt-5-nano",
+      "prefix": true,
+      "input": 50000,
+      "cached_input": 5000,
+      "output": 400000
+    },
+    {
+      "id": "E5FF1AC5-FC71-452E-B4E4-A39F5583F5D6",
+      "pattern": "gpt-5",
+      "prefix": true,
+      "input": 1250000,
+      "cached_input": 125000,
+      "output": 10000000
+    }
+  ]
+}

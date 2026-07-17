@@ -49,4 +49,75 @@ final class CodexConfigEditorTests: XCTestCase {
 
         XCTAssertThrowsError(try editor.restore(configuration))
     }
+
+    func testActivateRepairsUpstreamURLAndRestoreIsIdempotent() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent("config.toml")
+        let original = "model = \"gpt-5\"\nmodel_provider = \"relay\"\n[model_providers.relay]\nbase_url = \"https://relay.example/api\""
+        try original.write(to: configURL, atomically: true, encoding: .utf8)
+        let configuration = ProxyConfiguration(
+            configPath: configURL.path,
+            providerName: "relay",
+            bridgeModel: "gpt-5",
+            upstreamBaseURL: "https://relay.example/api",
+            localBaseURL: "http://127.0.0.1:17891/api",
+            port: 17891,
+            backupPath: nil
+        )
+
+        try CodexConfigEditor().activate(configuration)
+        XCTAssertTrue(try String(contentsOf: configURL).contains(
+            "base_url = \"http://127.0.0.1:17891/api\""
+        ))
+
+        try CodexConfigEditor().restore(configuration)
+        try CodexConfigEditor().restore(configuration)
+        XCTAssertEqual(try String(contentsOf: configURL), original)
+    }
+
+    func testInspectsAllProviderSectionsAndRestoresCurrentUpstream() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent("config.toml")
+        let config = """
+        model = "gpt-5"
+        model_provider = "relay"
+
+        [model_providers.relay]
+        name = "Relay One"
+        base_url = "http://127.0.0.1:17891/api"
+        env_key = "RELAY_KEY"
+
+        [model_providers."relay-two"]
+        name = "Relay Two"
+        base_url = "https://two.example/v1"
+        experimental_bearer_token = "secret-two"
+        """
+        try config.write(to: configURL, atomically: true, encoding: .utf8)
+        let installed = ProxyConfiguration(
+            configPath: configURL.path,
+            providerName: "relay",
+            bridgeModel: "gpt-5.5",
+            upstreamBaseURL: "https://one.example/api",
+            localBaseURL: "http://127.0.0.1:17891/api",
+            port: 17891,
+            backupPath: nil
+        )
+
+        let providers = try CodexConfigEditor().inspectProviders(
+            at: configURL,
+            originalConfiguration: installed
+        )
+
+        XCTAssertEqual(providers.count, 2)
+        XCTAssertEqual(providers[0].displayName, "Relay One")
+        XCTAssertEqual(providers[0].baseURL, "https://one.example/api")
+        XCTAssertEqual(providers[0].environmentKey, "RELAY_KEY")
+        XCTAssertTrue(providers[0].isCurrent)
+        XCTAssertEqual(providers[1].configName, "relay-two")
+        XCTAssertEqual(providers[1].bearerToken, "secret-two")
+    }
 }

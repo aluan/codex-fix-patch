@@ -19,7 +19,7 @@ enum SelfTestError: LocalizedError {
 }
 
 struct SelfTestService: Sendable {
-    func run(configuration: ProxyConfiguration, bearerToken: String) async throws -> URL {
+    func run(configuration: ProxyConfiguration, bearerToken: String? = nil) async throws -> URL {
         guard let baseURL = URL(string: configuration.localBaseURL) else {
             throw SelfTestError.invalidLocalURL
         }
@@ -29,7 +29,7 @@ struct SelfTestService: Sendable {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 600
-        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(bearerToken ?? "gptswitch-local")", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": "gpt-image-1",
