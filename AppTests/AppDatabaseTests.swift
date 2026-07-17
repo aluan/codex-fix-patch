@@ -3,6 +3,23 @@ import XCTest
 @testable import GPTSwitch
 
 final class AppDatabaseTests: XCTestCase {
+    func testPersistsProxyPortSetting() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("test.sqlite3")
+        let database = try AppDatabase(url: databaseURL)
+
+        let defaultPort = try await database.proxyPort()
+        XCTAssertEqual(defaultPort, 17891)
+        try await database.setProxyPort(23456)
+        let updatedPort = try await database.proxyPort()
+        XCTAssertEqual(updatedPort, 23456)
+
+        let reopened = try AppDatabase(url: databaseURL)
+        let persistedPort = try await reopened.proxyPort()
+        XCTAssertEqual(persistedPort, 23456)
+    }
+
     func testPersistsAggregatesPricingAndRetention() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

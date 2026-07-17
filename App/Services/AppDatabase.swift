@@ -321,6 +321,105 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
         try setSetting("retention_days", value: String(days))
     }
 
+    func proxyPort(default defaultPort: UInt16 = 17891) async throws -> UInt16 {
+        guard let value = try setting("proxy_port"),
+              let port = UInt16(value), port > 0 else { return defaultPort }
+        return port
+    }
+
+    func setProxyPort(_ port: UInt16) async throws {
+        try setSetting("proxy_port", value: String(port))
+    }
+
+    func customSkinThemes() async throws -> [SkinTheme] {
+        let statement = try prepare("""
+        SELECT id, name, image_path, accent, secondary, surface, text, created_at, updated_at
+        FROM custom_skin_themes ORDER BY updated_at DESC
+        """)
+        defer { sqlite3_finalize(statement) }
+        var themes: [SkinTheme] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let id = string(statement, 0),
+                  let name = string(statement, 1),
+                  let imagePath = string(statement, 2),
+                  let accent = string(statement, 3),
+                  let secondary = string(statement, 4),
+                  let surface = string(statement, 5),
+                  let text = string(statement, 6) else { continue }
+            themes.append(SkinTheme(
+                id: id,
+                name: name,
+                source: .custom,
+                imageReference: imagePath,
+                palette: SkinPalette(accent: accent, secondary: secondary, surface: surface, text: text),
+                createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 7)),
+                updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 8))
+            ))
+        }
+        return themes
+    }
+
+    func saveCustomSkinTheme(_ theme: SkinTheme) async throws {
+        guard theme.source == .custom else { throw SkinError.missingTheme }
+        let palette = try theme.palette.validated()
+        let statement = try prepare("""
+        INSERT INTO custom_skin_themes (
+            id, name, image_path, accent, secondary, surface, text, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            image_path = excluded.image_path,
+            accent = excluded.accent,
+            secondary = excluded.secondary,
+            surface = excluded.surface,
+            text = excluded.text,
+            updated_at = excluded.updated_at
+        """)
+        defer { sqlite3_finalize(statement) }
+        bind(theme.id, at: 1, in: statement)
+        bind(theme.name, at: 2, in: statement)
+        bind(theme.imageReference, at: 3, in: statement)
+        bind(palette.accent, at: 4, in: statement)
+        bind(palette.secondary, at: 5, in: statement)
+        bind(palette.surface, at: 6, in: statement)
+        bind(palette.text, at: 7, in: statement)
+        sqlite3_bind_double(statement, 8, theme.createdAt.timeIntervalSince1970)
+        sqlite3_bind_double(statement, 9, theme.updatedAt.timeIntervalSince1970)
+        try stepDone(statement)
+    }
+
+    func deleteCustomSkinTheme(id: String) async throws {
+        let statement = try prepare("DELETE FROM custom_skin_themes WHERE id = ?")
+        defer { sqlite3_finalize(statement) }
+        bind(id, at: 1, in: statement)
+        try stepDone(statement)
+    }
+
+    func skinEnabled() async throws -> Bool {
+        try setting("skin_enabled") == "1"
+    }
+
+    func setSkinEnabled(_ enabled: Bool) async throws {
+        try setSetting("skin_enabled", value: enabled ? "1" : "0")
+    }
+
+    func selectedSkinThemeID() async throws -> String {
+        try setting("selected_skin_theme_id") ?? BuiltInSkinCatalog.defaultThemeID
+    }
+
+    func setSelectedSkinThemeID(_ id: String) async throws {
+        try setSetting("selected_skin_theme_id", value: id)
+    }
+
+    func loginItemBeforeSkin() async throws -> Bool? {
+        guard let value = try setting("login_item_before_skin") else { return nil }
+        return value == "1"
+    }
+
+    func setLoginItemBeforeSkin(_ enabled: Bool) async throws {
+        try setSetting("login_item_before_skin", value: enabled ? "1" : "0")
+    }
+
     private func estimateCost(
         usage: TokenUsage,
         model: String,
@@ -737,9 +836,9 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
             if sqlite3_step(statement) == SQLITE_ROW { version = Int(sqlite3_column_int(statement, 0)) }
             sqlite3_finalize(statement)
         }
-        guard version < 1 else { return }
-        try execute("BEGIN IMMEDIATE", on: connection)
-        do {
+        if version < 1 {
+            try execute("BEGIN IMMEDIATE", on: connection)
+            do {
             try execute("""
             CREATE TABLE providers (
                 id TEXT PRIMARY KEY,
@@ -813,9 +912,37 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
             INSERT INTO schema_migrations(version, applied_at) VALUES (1, strftime('%s', 'now'));
             """, on: connection)
             try execute("COMMIT", on: connection)
-        } catch {
-            try? execute("ROLLBACK", on: connection)
-            throw error
+                version = 1
+            } catch {
+                try? execute("ROLLBACK", on: connection)
+                throw error
+            }
+        }
+        if version < 2 {
+            try execute("BEGIN IMMEDIATE", on: connection)
+            do {
+                try execute("""
+                CREATE TABLE custom_skin_themes (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    image_path TEXT NOT NULL,
+                    accent TEXT NOT NULL,
+                    secondary TEXT NOT NULL,
+                    surface TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE INDEX custom_skin_themes_updated_idx ON custom_skin_themes(updated_at DESC);
+                INSERT OR IGNORE INTO app_settings(key, value) VALUES ('skin_enabled', '0');
+                INSERT OR IGNORE INTO app_settings(key, value) VALUES ('selected_skin_theme_id', 'ocean-glass');
+                INSERT INTO schema_migrations(version, applied_at) VALUES (2, strftime('%s', 'now'));
+                """, on: connection)
+                try execute("COMMIT", on: connection)
+            } catch {
+                try? execute("ROLLBACK", on: connection)
+                throw error
+            }
         }
     }
 }

@@ -3,10 +3,15 @@ import SwiftUI
 
 struct UsageDashboardView: View {
     @Bindable var model: AppModel
+    @Binding var providerFilter: UUID?
     @State private var detailTab = UsageDetailTab.requests
-    @State private var providerFilter: UUID?
     @State private var statusFilter = RequestStatusFilter.all
     @State private var modelSearch = ""
+
+    init(model: AppModel, providerFilter: Binding<UUID?> = .constant(nil)) {
+        self.model = model
+        _providerFilter = providerFilter
+    }
 
     var body: some View {
         ScrollView {

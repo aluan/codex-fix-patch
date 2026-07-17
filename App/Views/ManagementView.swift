@@ -1,93 +1,87 @@
+import Observation
 import SwiftUI
 
-enum ManagementSelection: Hashable {
-    case provider(UUID)
+enum MainSection: String, CaseIterable, Hashable, Sendable {
+    case providers
     case usage
+    case skins
+    case settings
+
+    var title: String {
+        switch self {
+        case .providers: "Providers"
+        case .usage: "使用统计"
+        case .skins: "换肤"
+        case .settings: "设置"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .providers: "server.rack"
+        case .usage: "chart.xyaxis.line"
+        case .skins: "paintpalette"
+        case .settings: "gearshape"
+        }
+    }
+}
+
+@MainActor
+@Observable
+final class MainNavigation {
+    var section: MainSection = .providers
+    var editingProviderID: UUID?
+    var usageProviderFilter: UUID?
+
+    func show(_ section: MainSection) {
+        self.section = section
+        if section != .providers { editingProviderID = nil }
+        if section != .usage { usageProviderFilter = nil }
+    }
+
+    func editProvider(_ id: UUID) {
+        section = .providers
+        editingProviderID = id
+    }
+
+    func showUsage(for providerID: UUID? = nil) {
+        editingProviderID = nil
+        usageProviderFilter = providerID
+        section = .usage
+    }
 }
 
 struct ManagementView: View {
     @Bindable var model: AppModel
-    @State private var selection: ManagementSelection?
+    @Bindable var navigation: MainNavigation
     @State private var showingNewProvider = false
     @State private var providerPendingDeletion: ProviderProfile?
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $selection) {
-                Section("Providers") {
-                    ForEach(model.providers) { provider in
-                        ProviderSidebarRow(
-                            provider: provider,
-                            isActive: provider.id == model.activeProviderID
-                        )
-                        .tag(ManagementSelection.provider(provider.id))
-                        .contextMenu {
-                            Button("编辑") {
-                                selection = .provider(provider.id)
-                            }
-                            Button("启用") { model.switchProvider(to: provider.id) }
-                                .disabled(provider.id == model.activeProviderID)
-                            Button("复制") { model.duplicateProvider(provider.id) }
-                            Divider()
-                            Button("删除", role: .destructive) {
-                                selection = .provider(provider.id)
-                                providerPendingDeletion = provider
-                            }
-                            .disabled(provider.id == model.activeProviderID)
-                        }
-                    }
-                    .onMove { indices, destination in
-                        var ids = model.providers.map(\.id)
-                        ids.move(fromOffsets: indices, toOffset: destination)
-                        model.reorderProviders(ids)
-                    }
-                }
-
-                Section("分析") {
-                    Label("使用统计", systemImage: "chart.xyaxis.line")
-                        .tag(ManagementSelection.usage)
-                }
+        VStack(spacing: 0) {
+            MainControlBar(
+                model: model,
+                navigation: navigation,
+                canAddProvider: navigation.section == .providers && navigation.editingProviderID == nil,
+                addProvider: { showingNewProvider = true }
+            )
+            Divider()
+            if let error = model.lastError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .background(.red.opacity(0.08))
             }
-            .listStyle(.sidebar)
-            .navigationTitle("GPTSwitch")
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 8) {
-                    Button {
-                        showingNewProvider = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .help("添加 Provider")
-                    .keyboardShortcut("n")
-
-                    Button {
-                        if let selectedProvider {
-                            providerPendingDeletion = selectedProvider
-                        }
-                    } label: {
-                        Image(systemName: "minus")
-                    }
-                    .help(deleteHelp)
-                    .disabled(selectedProvider == nil || selectedProvider?.id == model.activeProviderID)
-
-                    Spacer()
-                }
-                .buttonStyle(.borderless)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(.bar)
-            }
-        } detail: {
-            detail
+            content
         }
-        .onAppear {
-            if selection == nil {
-                selection = model.activeProviderID.map(ManagementSelection.provider) ?? .usage
-            }
-        }
+        .frame(minWidth: 760, minHeight: 520)
         .sheet(isPresented: $showingNewProvider) {
             ProviderCreateView(model: model) { providerID in
-                selection = .provider(providerID)
+                navigation.editProvider(providerID)
             }
         }
         .confirmationDialog(
@@ -98,26 +92,103 @@ struct ManagementView: View {
             Button("删除 Provider", role: .destructive) {
                 guard let provider = providerPendingDeletion else { return }
                 Task {
-                    if await model.deleteProvider(provider.id) {
-                        selection = model.activeProviderID.map(ManagementSelection.provider) ?? .usage
-                    }
+                    _ = await model.deleteProvider(provider.id)
                     providerPendingDeletion = nil
                 }
             }
         } message: {
             Text("Provider 配置和对应的钥匙串密钥将被删除，此操作无法撤销。")
         }
+        .onChange(of: model.providers) {
+            if let id = navigation.editingProviderID,
+               !model.providers.contains(where: { $0.id == id }) {
+                navigation.editingProviderID = nil
+            }
+        }
     }
 
-    private var selectedProvider: ProviderProfile? {
-        guard case .provider(let id) = selection else { return nil }
-        return model.providers.first { $0.id == id }
+    @ViewBuilder
+    private var content: some View {
+        switch navigation.section {
+        case .providers:
+            if let providerID = navigation.editingProviderID,
+               let provider = model.providers.first(where: { $0.id == providerID }) {
+                providerDetail(provider)
+            } else {
+                providerList
+            }
+        case .usage:
+            UsageDashboardView(
+                model: model,
+                providerFilter: Binding(
+                    get: { navigation.usageProviderFilter },
+                    set: { navigation.usageProviderFilter = $0 }
+                )
+            )
+        case .skins:
+            SkinStudioView(model: model)
+        case .settings:
+            SettingsView(model: model)
+        }
     }
 
-    private var deleteHelp: String {
-        selectedProvider?.id == model.activeProviderID
-            ? "请先启用其他 Provider，再删除当前 Provider"
-            : "删除所选 Provider"
+    private var providerList: some View {
+        Group {
+            if model.providers.isEmpty {
+                ContentUnavailableView {
+                    Label("尚未添加 Provider", systemImage: "server.rack")
+                } description: {
+                    Text("添加一个 Responses API Provider 后即可启动本地代理。")
+                } actions: {
+                    Button("添加 Provider") { showingNewProvider = true }
+                        .buttonStyle(.borderedProminent)
+                }
+            } else {
+                List {
+                    ForEach(model.providers) { provider in
+                        ProviderCardRow(
+                            model: model,
+                            navigation: navigation,
+                            provider: provider,
+                            edit: { navigation.editProvider(provider.id) },
+                            delete: { providerPendingDeletion = provider }
+                        )
+                        .listRowInsets(EdgeInsets(top: 7, leading: 20, bottom: 7, trailing: 20))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                    }
+                    .onMove { indices, destination in
+                        var ids = model.providers.map(\.id)
+                        ids.move(fromOffsets: indices, toOffset: destination)
+                        model.reorderProviders(ids)
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+            }
+        }
+    }
+
+    private func providerDetail(_ provider: ProviderProfile) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button {
+                    navigation.editingProviderID = nil
+                } label: {
+                    Label("返回 Providers", systemImage: "chevron.left")
+                }
+                .keyboardShortcut("[", modifiers: .command)
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(.bar)
+            Divider()
+            ProviderDetailView(model: model, provider: provider) {
+                navigation.editingProviderID = nil
+            }
+            .id(provider.id)
+        }
     }
 
     private var deleteConfirmationPresented: Binding<Bool> {
@@ -126,52 +197,213 @@ struct ManagementView: View {
             set: { if !$0 { providerPendingDeletion = nil } }
         )
     }
+}
 
-    @ViewBuilder
-    private var detail: some View {
-        switch selection {
-        case .provider(let id):
-            if let provider = model.providers.first(where: { $0.id == id }) {
-                ProviderDetailView(model: model, provider: provider) {
-                    selection = model.activeProviderID.map(ManagementSelection.provider) ?? .usage
+private struct MainControlBar: View {
+    @Bindable var model: AppModel
+    @Bindable var navigation: MainNavigation
+    let canAddProvider: Bool
+    let addProvider: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Text("GPTSwitch")
+                .font(.title2.weight(.semibold))
+
+            Divider()
+                .frame(height: 24)
+
+            Toggle("代理", isOn: Binding(
+                get: { model.proxyEnabled },
+                set: { model.setProxyEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .disabled(model.isProxyTransitioning || (model.activeProvider == nil && !model.proxyEnabled))
+
+            Label(model.status.title, systemImage: model.status.symbolName)
+                .font(.callout)
+                .foregroundStyle(statusColor)
+
+            Text(model.providerName)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: 170, alignment: .leading)
+
+            Spacer(minLength: 12)
+
+            Picker("主界面", selection: Binding(
+                get: { navigation.section },
+                set: { navigation.show($0) }
+            )) {
+                ForEach(MainSection.allCases, id: \.self) { section in
+                    Image(systemName: section.systemImage)
+                        .accessibilityLabel(section.title)
+                        .tag(section)
                 }
-                    .id(provider.id)
-            } else {
-                ContentUnavailableView("Provider 不存在", systemImage: "externaldrive.badge.questionmark")
             }
-        case .usage:
-            UsageDashboardView(model: model)
-        case nil:
-            ContentUnavailableView("选择一个项目", systemImage: "sidebar.left")
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+
+            Spacer(minLength: 12)
+
+            Button(action: addProvider) {
+                Image(systemName: "plus")
+                    .font(.headline)
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.borderedProminent)
+            .clipShape(Circle())
+            .help("添加 Provider")
+            .keyboardShortcut("n")
+            .opacity(canAddProvider ? 1 : 0)
+            .disabled(!canAddProvider)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.bar)
+    }
+
+    private var statusColor: Color {
+        switch model.status {
+        case .running: .green
+        case .starting, .testing: .orange
+        case .failed: .red
+        case .notConfigured, .stopped: .secondary
         }
     }
 }
 
-private struct ProviderSidebarRow: View {
+private struct ProviderCardRow: View {
+    @Bindable var model: AppModel
+    @Bindable var navigation: MainNavigation
     let provider: ProviderProfile
-    let isActive: Bool
+    let edit: () -> Void
+    let delete: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: provider.healthState.symbolName)
-                .foregroundStyle(healthColor)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
+        HStack(spacing: 14) {
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(.tertiary)
+                .help("拖动排序")
+
+            Text(initials)
+                .font(.headline)
+                .foregroundStyle(.tint)
+                .frame(width: 38, height: 38)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
                     Text(provider.displayName)
+                        .font(.headline)
                         .lineLimit(1)
                     if isActive {
-                        Text("使用中")
-                            .font(.caption2)
+                        Text("当前使用")
+                            .font(.caption2.weight(.medium))
                             .foregroundStyle(.tint)
                     }
                 }
-                Text(URL(string: provider.baseURL)?.host ?? provider.baseURL)
-                    .font(.caption)
+                Text(provider.baseURL)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .textSelection(.enabled)
+                HStack(spacing: 6) {
+                    Label(provider.healthState.title, systemImage: provider.healthState.symbolName)
+                        .foregroundStyle(healthColor)
+                    if let latency = provider.lastHealthLatencyMilliseconds {
+                        Text("\(latency) ms")
+                    }
+                    if let checked = provider.lastCheckedAt {
+                        Text("·")
+                        Text(checked, style: .relative)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.tertiary)
             }
+
+            Spacer(minLength: 16)
+
+            if model.checkingProviderIDs.contains(provider.id) || (isActive && model.status == .testing) {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            if isActive {
+                Label("已启用", systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.green)
+                    .frame(width: 72)
+            } else {
+                Button("启用") { model.switchProvider(to: provider.id) }
+                    .buttonStyle(.borderedProminent)
+            }
+
+            Button(action: edit) {
+                Image(systemName: "pencil")
+            }
+            .help("编辑 Provider")
+
+            Button {
+                model.duplicateProvider(provider.id)
+            } label: {
+                Image(systemName: "square.on.square")
+            }
+            .help("复制 Provider")
+
+            Menu {
+                Button("端点测速") { model.measureProvider(provider.id) }
+                Button("模型自检") { model.testProviderModel(provider.id) }
+                Button("生图自检") { model.runSelfTest(for: provider.id) }
+                    .disabled(!model.canRunImageSelfTest(for: provider.id))
+            } label: {
+                Image(systemName: "waveform.path.ecg")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Provider 检测")
+
+            Button {
+                navigation.showUsage(for: provider.id)
+            } label: {
+                Image(systemName: "chart.bar")
+            }
+            .help("查看 Provider 统计")
+
+            Button(role: .destructive, action: delete) {
+                Image(systemName: "trash")
+            }
+            .disabled(isActive)
+            .help(isActive ? "请先启用其他 Provider" : "删除 Provider")
         }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isActive ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: isActive ? 1.5 : 1)
+        }
+        .contextMenu {
+            Button("编辑") { edit() }
+            Button("启用") { model.switchProvider(to: provider.id) }
+                .disabled(isActive)
+            Button("复制") { model.duplicateProvider(provider.id) }
+            Divider()
+            Button("删除", role: .destructive) { delete() }
+                .disabled(isActive)
+        }
+    }
+
+    private var isActive: Bool { provider.id == model.activeProviderID }
+
+    private var initials: String {
+        let words = provider.displayName.split(separator: " ")
+        let characters = words.prefix(2).compactMap(\.first)
+        return characters.isEmpty ? String(provider.displayName.prefix(1)).uppercased() : String(characters).uppercased()
     }
 
     private var healthColor: Color {
@@ -232,13 +464,6 @@ private struct ProviderCreateView: View {
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(isSaving)
-                .overlay {
-                    if isSaving {
-                        ProgressView()
-                            .controlSize(.small)
-                            .offset(x: -54)
-                    }
-                }
             }
         }
         .padding(24)

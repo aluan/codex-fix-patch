@@ -18,6 +18,11 @@ final class AppModel {
     private(set) var statisticsEnabled = true
     private(set) var retentionDays = 90
     private(set) var checkingProviderIDs: Set<UUID> = []
+    private(set) var persistedProxyPort: UInt16 = 17891
+    private(set) var skinThemes: [SkinTheme] = BuiltInSkinCatalog.themes
+    private(set) var selectedSkinThemeID = BuiltInSkinCatalog.defaultThemeID
+    private(set) var skinEnabled = false
+    private(set) var skinRuntimeStatus: SkinRuntimeStatus = .native
     var usageTimeRange: UsageTimeRange = .hours24
     var editablePort = "17891"
 
@@ -28,11 +33,17 @@ final class AppModel {
     private let loginItemService = LoginItemService()
     private let selfTestService = SelfTestService()
     private let healthService = ProviderHealthService()
+    private let skinService = CodexSkinService()
+    private let skinImageProcessor = SkinImageProcessor()
     private let credentialStore: any CredentialStore = KeychainCredentialStore()
     private var database: AppDatabase?
     private var providerRouter: ActiveProviderRouter?
     private var server: NativeProxyServer?
     private var lastUsageRefresh = Date.distantPast
+    private var skinMonitorTask: Task<Void, Never>?
+    private var skinLaunchObserver: NSObjectProtocol?
+    private var skinReconcileInProgress = false
+    private var skinReconcileRequested = false
 
     init() {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
@@ -46,9 +57,22 @@ final class AppModel {
         status == .running || status == .testing
     }
 
+    var proxyEnabled: Bool {
+        configuration?.isEnabled == true
+    }
+
+    var isProxyTransitioning: Bool {
+        status == .starting || status == .testing
+    }
+
     var canApply: Bool {
         guard let port = UInt16(editablePort), port > 0 else { return false }
         return activeProvider != nil
+    }
+
+    var canApplyProxySettings: Bool {
+        guard let port = UInt16(editablePort), port > 0 else { return false }
+        return port != persistedProxyPort
     }
 
     var activeProvider: ProviderProfile? {
@@ -63,6 +87,14 @@ final class AppModel {
         activeProvider?.baseURL ?? configuration?.upstreamBaseURL ?? inspection?.baseURL ?? "—"
     }
 
+    var selectedSkinTheme: SkinTheme? {
+        skinThemes.first { $0.id == selectedSkinThemeID }
+    }
+
+    var isSkinTransitioning: Bool {
+        skinRuntimeStatus == .restarting || skinRuntimeStatus == .injecting
+    }
+
     func bootstrap() async {
         status = .starting
         loginItemEnabled = loginItemService.isEnabled
@@ -73,6 +105,10 @@ final class AppModel {
             self.database = database
             var saved = try stateStore.load()
             savedConfiguration = saved
+            let defaultPort = saved?.port ?? 17891
+            let storedPort = try await database.proxyPort(default: defaultPort)
+            persistedProxyPort = saved?.isEnabled == true ? defaultPort : storedPort
+            editablePort = String(persistedProxyPort)
             if var current = saved {
                 let refreshLoginItem = current.toolVersion != ProxyConfiguration.currentToolVersion
                 if refreshLoginItem {
@@ -81,12 +117,11 @@ final class AppModel {
                     saved = current
                 }
                 configuration = current
-                editablePort = String(current.port)
                 savedConfiguration = current
             } else {
                 inspection = try configEditor.inspect()
             }
-            let migrationPort = saved?.port ?? UInt16(editablePort) ?? 17891
+            let migrationPort = persistedProxyPort
             try await providerMigrationService.migrateIfNeeded(
                 database: database,
                 configuration: saved,
@@ -98,6 +133,7 @@ final class AppModel {
             try await reloadProviders()
             statisticsEnabled = try await database.statisticsEnabled()
             retentionDays = try await database.retentionDays()
+            await bootstrapSkin(database: database)
             if retentionDays > 0 {
                 try await database.purgeUsage(olderThan: Date().addingTimeInterval(-Double(retentionDays) * 86_400))
             }
@@ -126,6 +162,35 @@ final class AppModel {
         Task { await applyAndStartAsync() }
     }
 
+    func setProxyEnabled(_ enabled: Bool) {
+        guard enabled != proxyEnabled else { return }
+        if enabled {
+            applyAndStart()
+        } else {
+            disableAndRestore()
+        }
+    }
+
+    func applyProxySettings() {
+        guard let port = UInt16(editablePort), port > 0 else {
+            failMessage("端口必须是 1–65535 之间的数字")
+            return
+        }
+        if proxyEnabled {
+            Task { await applyAndStartAsync() }
+        } else {
+            Task {
+                do {
+                    try await database?.setProxyPort(port)
+                    persistedProxyPort = port
+                    lastError = nil
+                } catch {
+                    fail(error)
+                }
+            }
+        }
+    }
+
     func stopProxy() {
         server?.stop()
         server = nil
@@ -140,7 +205,7 @@ final class AppModel {
             current.isEnabled = false
             try stateStore.save(current)
             configuration = current
-            try? loginItemService.setEnabled(false)
+            try? loginItemService.setEnabled(skinEnabled)
             loginItemEnabled = loginItemService.isEnabled
             status = .stopped
             lastError = nil
@@ -150,8 +215,12 @@ final class AppModel {
         }
     }
 
-    func runSelfTest() {
-        guard let configuration, isRunning else { return }
+    func canRunImageSelfTest(for providerID: UUID) -> Bool {
+        providerID == activeProviderID && status == .running
+    }
+
+    func runSelfTest(for providerID: UUID) {
+        guard let configuration, canRunImageSelfTest(for: providerID) else { return }
         status = .testing
         lastError = nil
         Task {
@@ -356,6 +425,10 @@ final class AppModel {
     }
 
     func setLoginItemEnabled(_ enabled: Bool) {
+        guard enabled || !skinEnabled else {
+            failSkinMessage("换肤常驻期间需要登录启动 GPTSwitch")
+            return
+        }
         do {
             try loginItemService.setEnabled(enabled)
             loginItemEnabled = loginItemService.isEnabled
@@ -374,6 +447,153 @@ final class AppModel {
         NSWorkspace.shared.open(AppPaths.codexConfig)
     }
 
+    func selectSkinTheme(_ id: String) {
+        guard skinThemes.contains(where: { $0.id == id }) else { return }
+        selectedSkinThemeID = id
+        Task {
+            do {
+                try await database?.setSelectedSkinThemeID(id)
+                if skinEnabled, selectedSkinTheme != nil {
+                    skinRuntimeStatus = .injecting
+                    await reconcileSkin()
+                }
+            } catch {
+                failSkin(error)
+            }
+        }
+    }
+
+    func applySelectedSkin() {
+        guard let theme = selectedSkinTheme else {
+            failSkin(SkinError.missingTheme)
+            return
+        }
+        Task {
+            do {
+                if !skinEnabled {
+                    try await database?.setLoginItemBeforeSkin(loginItemEnabled)
+                    try loginItemService.setEnabled(true)
+                    loginItemEnabled = loginItemService.isEnabled
+                    try await database?.setSkinEnabled(true)
+                    skinEnabled = true
+                }
+                skinRuntimeStatus = (try skinService.isCodexRunning()) ? .restarting : .waitingForCodex
+                skinRuntimeStatus = try await skinService.apply(theme)
+                startSkinMonitor()
+                lastError = nil
+            } catch {
+                failSkin(error)
+            }
+        }
+    }
+
+    func isCodexRunningForSkin() -> Bool {
+        (try? skinService.isCodexRunning()) == true
+    }
+
+    func restoreNativeSkin() {
+        stopSkinMonitor()
+        Task {
+            do {
+                while skinReconcileInProgress {
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                if try skinService.isCodexRunning() { skinRuntimeStatus = .restarting }
+                skinRuntimeStatus = try await skinService.restore()
+                try await database?.setSkinEnabled(false)
+                skinEnabled = false
+                let previousLoginItem = try await database?.loginItemBeforeSkin() ?? false
+                try loginItemService.setEnabled(proxyEnabled || previousLoginItem)
+                loginItemEnabled = loginItemService.isEnabled
+                lastError = nil
+            } catch {
+                failSkin(error)
+                if skinEnabled { startSkinMonitor() }
+            }
+        }
+    }
+
+    func prepareSkinImage(at url: URL) async throws -> PreparedSkinImage {
+        try await Task.detached { try SkinImageProcessor().prepare(url: url) }.value
+    }
+
+    func saveCustomSkin(
+        name: String,
+        prepared: PreparedSkinImage,
+        palette: SkinPalette
+    ) async -> SkinTheme? {
+        var savedTheme: SkinTheme?
+        do {
+            guard let database else { throw SkinError.missingTheme }
+            let theme = try await Task.detached {
+                try SkinImageProcessor().saveCustomTheme(prepared: prepared, name: name, palette: palette)
+            }.value
+            savedTheme = theme
+            try await database.saveCustomSkinTheme(theme)
+            try await reloadSkinThemes()
+            selectSkinTheme(theme.id)
+            lastError = nil
+            return theme
+        } catch {
+            if let savedTheme { try? skinImageProcessor.deleteFiles(for: savedTheme) }
+            failSkin(error)
+            return nil
+        }
+    }
+
+    func updateCustomSkin(_ theme: SkinTheme) async -> Bool {
+        do {
+            guard theme.source == .custom, let database else { throw SkinError.missingTheme }
+            var updated = theme
+            updated.name = theme.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !updated.name.isEmpty, updated.name.count <= 80 else {
+                throw SkinError.invalidImage("主题名称必须为 1–80 个字符")
+            }
+            updated.palette = try updated.palette.validated()
+            updated.updatedAt = Date()
+            try await database.saveCustomSkinTheme(updated)
+            try await reloadSkinThemes()
+            if skinEnabled, selectedSkinThemeID == updated.id {
+                skinRuntimeStatus = .injecting
+                await reconcileSkin()
+            }
+            lastError = nil
+            return true
+        } catch {
+            failSkin(error)
+            return false
+        }
+    }
+
+    func deleteCustomSkin(_ id: String) async -> Bool {
+        do {
+            guard let database,
+                  let theme = skinThemes.first(where: { $0.id == id && $0.source == .custom }) else {
+                throw SkinError.missingTheme
+            }
+            if selectedSkinThemeID == id {
+                selectedSkinThemeID = BuiltInSkinCatalog.defaultThemeID
+                try await database.setSelectedSkinThemeID(selectedSkinThemeID)
+            }
+            try await database.deleteCustomSkinTheme(id: id)
+            do {
+                try skinImageProcessor.deleteFiles(for: theme)
+            } catch {
+                AppLog.error("Custom skin metadata was deleted but its image files could not be removed")
+            }
+            try await reloadSkinThemes()
+            if skinEnabled, selectedSkinTheme != nil {
+                skinRuntimeStatus = .injecting
+                await reconcileSkin()
+            }
+            lastError = nil
+            return true
+        } catch {
+            failSkin(error)
+            return false
+        }
+    }
+
     private func applyAndStartAsync() async {
         guard let port = UInt16(editablePort), port > 0 else {
             failMessage("端口必须是 1–65535 之间的数字")
@@ -381,6 +601,8 @@ final class AppModel {
         }
         do {
             let snapshot = try makeActiveSnapshot()
+            try await database?.setProxyPort(port)
+            persistedProxyPort = port
             if let current = configuration, current.isEnabled {
                 if current.port == port {
                     try configEditor.activate(current)
@@ -477,6 +699,85 @@ final class AppModel {
         }
     }
 
+    private func bootstrapSkin(database: AppDatabase) async {
+        do {
+            skinThemes = BuiltInSkinCatalog.themes + (try await database.customSkinThemes())
+            selectedSkinThemeID = try await database.selectedSkinThemeID()
+            if !skinThemes.contains(where: { $0.id == selectedSkinThemeID }) {
+                selectedSkinThemeID = BuiltInSkinCatalog.defaultThemeID
+                try await database.setSelectedSkinThemeID(selectedSkinThemeID)
+            }
+            skinEnabled = try await database.skinEnabled()
+            if skinEnabled {
+                try loginItemService.setEnabled(true)
+                loginItemEnabled = loginItemService.isEnabled
+                startSkinMonitor()
+            } else {
+                skinRuntimeStatus = .native
+            }
+        } catch {
+            failSkin(error)
+        }
+    }
+
+    private func reloadSkinThemes() async throws {
+        guard let database else { return }
+        skinThemes = BuiltInSkinCatalog.themes + (try await database.customSkinThemes())
+    }
+
+    private func startSkinMonitor() {
+        guard skinMonitorTask == nil || skinMonitorTask?.isCancelled == true else { return }
+        if skinLaunchObserver == nil {
+            skinLaunchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didLaunchApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                      application.bundleIdentifier == "com.openai.codex" else { return }
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    await self?.reconcileSkin()
+                }
+            }
+        }
+        skinMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.skinEnabled else { return }
+                await self.reconcileSkin()
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    private func stopSkinMonitor() {
+        skinMonitorTask?.cancel()
+        skinMonitorTask = nil
+        if let skinLaunchObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(skinLaunchObserver)
+            self.skinLaunchObserver = nil
+        }
+    }
+
+    private func reconcileSkin() async {
+        if skinReconcileInProgress {
+            skinReconcileRequested = true
+            return
+        }
+        skinReconcileInProgress = true
+        defer { skinReconcileInProgress = false }
+        repeat {
+            skinReconcileRequested = false
+            guard skinEnabled, let theme = selectedSkinTheme else { return }
+            do {
+                skinRuntimeStatus = try await skinService.apply(theme)
+                lastError = nil
+            } catch {
+                failSkin(error)
+            }
+        } while skinReconcileRequested
+    }
+
     private func runProviderCheck(_ id: UUID, modelCheck: Bool) {
         guard let provider = providers.first(where: { $0.id == id }) else { return }
         checkingProviderIDs.insert(id)
@@ -532,7 +833,6 @@ final class AppModel {
             }
         } else {
             metrics.failedRequests += 1
-            lastError = metric.statusCode.map { "上游请求失败（HTTP \($0)）" } ?? "上游网络请求失败"
         }
         Task {
             do {
@@ -558,6 +858,16 @@ final class AppModel {
 
     private func fail(_ error: Error) {
         failMessage(error.localizedDescription)
+    }
+
+    private func failSkin(_ error: Error) {
+        failSkinMessage(error.localizedDescription)
+    }
+
+    private func failSkinMessage(_ message: String) {
+        skinRuntimeStatus = .failed(message)
+        lastError = message
+        AppLog.error(message)
     }
 
     private func failMessage(_ message: String) {
