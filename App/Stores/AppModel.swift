@@ -18,6 +18,7 @@ final class AppModel {
     private(set) var statisticsEnabled = true
     private(set) var retentionDays = 90
     private(set) var checkingProviderIDs: Set<UUID> = []
+    private(set) var persistedProxyPort: UInt16 = 17891
     var usageTimeRange: UsageTimeRange = .hours24
     var editablePort = "17891"
 
@@ -46,9 +47,22 @@ final class AppModel {
         status == .running || status == .testing
     }
 
+    var proxyEnabled: Bool {
+        configuration?.isEnabled == true
+    }
+
+    var isProxyTransitioning: Bool {
+        status == .starting || status == .testing
+    }
+
     var canApply: Bool {
         guard let port = UInt16(editablePort), port > 0 else { return false }
         return activeProvider != nil
+    }
+
+    var canApplyProxySettings: Bool {
+        guard let port = UInt16(editablePort), port > 0 else { return false }
+        return port != persistedProxyPort
     }
 
     var activeProvider: ProviderProfile? {
@@ -73,6 +87,10 @@ final class AppModel {
             self.database = database
             var saved = try stateStore.load()
             savedConfiguration = saved
+            let defaultPort = saved?.port ?? 17891
+            let storedPort = try await database.proxyPort(default: defaultPort)
+            persistedProxyPort = saved?.isEnabled == true ? defaultPort : storedPort
+            editablePort = String(persistedProxyPort)
             if var current = saved {
                 let refreshLoginItem = current.toolVersion != ProxyConfiguration.currentToolVersion
                 if refreshLoginItem {
@@ -81,12 +99,11 @@ final class AppModel {
                     saved = current
                 }
                 configuration = current
-                editablePort = String(current.port)
                 savedConfiguration = current
             } else {
                 inspection = try configEditor.inspect()
             }
-            let migrationPort = saved?.port ?? UInt16(editablePort) ?? 17891
+            let migrationPort = persistedProxyPort
             try await providerMigrationService.migrateIfNeeded(
                 database: database,
                 configuration: saved,
@@ -126,6 +143,35 @@ final class AppModel {
         Task { await applyAndStartAsync() }
     }
 
+    func setProxyEnabled(_ enabled: Bool) {
+        guard enabled != proxyEnabled else { return }
+        if enabled {
+            applyAndStart()
+        } else {
+            disableAndRestore()
+        }
+    }
+
+    func applyProxySettings() {
+        guard let port = UInt16(editablePort), port > 0 else {
+            failMessage("端口必须是 1–65535 之间的数字")
+            return
+        }
+        if proxyEnabled {
+            Task { await applyAndStartAsync() }
+        } else {
+            Task {
+                do {
+                    try await database?.setProxyPort(port)
+                    persistedProxyPort = port
+                    lastError = nil
+                } catch {
+                    fail(error)
+                }
+            }
+        }
+    }
+
     func stopProxy() {
         server?.stop()
         server = nil
@@ -150,8 +196,12 @@ final class AppModel {
         }
     }
 
-    func runSelfTest() {
-        guard let configuration, isRunning else { return }
+    func canRunImageSelfTest(for providerID: UUID) -> Bool {
+        providerID == activeProviderID && status == .running
+    }
+
+    func runSelfTest(for providerID: UUID) {
+        guard let configuration, canRunImageSelfTest(for: providerID) else { return }
         status = .testing
         lastError = nil
         Task {
@@ -381,6 +431,8 @@ final class AppModel {
         }
         do {
             let snapshot = try makeActiveSnapshot()
+            try await database?.setProxyPort(port)
+            persistedProxyPort = port
             if let current = configuration, current.isEnabled {
                 if current.port == port {
                     try configEditor.activate(current)
@@ -532,7 +584,6 @@ final class AppModel {
             }
         } else {
             metrics.failedRequests += 1
-            lastError = metric.statusCode.map { "上游请求失败（HTTP \($0)）" } ?? "上游网络请求失败"
         }
         Task {
             do {

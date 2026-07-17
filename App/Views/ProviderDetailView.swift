@@ -99,9 +99,12 @@ struct ProviderDetailView: View {
                 Spacer()
                 ProgressView()
                     .controlSize(.small)
-                    .opacity(model.checkingProviderIDs.contains(provider.id) ? 1 : 0)
+                    .opacity(isChecking ? 1 : 0)
                 Button("端点测速") { model.measureProvider(provider.id) }
                 Button("模型自检") { model.testProviderModel(provider.id) }
+                Button("生图自检") { model.runSelfTest(for: provider.id) }
+                    .disabled(!model.canRunImageSelfTest(for: provider.id))
+                    .help(imageSelfTestHelp)
             }
             if let message = provider.lastHealthError {
                 Text(message)
@@ -110,6 +113,24 @@ struct ProviderDetailView: View {
                     .padding(.top, 4)
             }
         }
+    }
+
+    private var isChecking: Bool {
+        model.checkingProviderIDs.contains(provider.id)
+            || (provider.id == model.activeProviderID && model.status == .testing)
+    }
+
+    private var imageSelfTestHelp: String {
+        if provider.id != model.activeProviderID {
+            return "请先启用此 Provider"
+        }
+        if model.status == .testing {
+            return "生图自检正在运行"
+        }
+        if !model.isRunning {
+            return "请先启动本地代理"
+        }
+        return "通过本地代理执行一次真实生图请求"
     }
 
     private var actions: some View {

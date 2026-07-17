@@ -3,6 +3,25 @@ import XCTest
 @testable import GPTSwitch
 
 final class ProviderModelsTests: XCTestCase {
+    @MainActor
+    func testMainNavigationCoordinatesProviderEditingAndUsageFiltering() {
+        let navigation = MainNavigation()
+        let providerID = UUID()
+
+        navigation.editProvider(providerID)
+        XCTAssertEqual(navigation.section, .providers)
+        XCTAssertEqual(navigation.editingProviderID, providerID)
+
+        navigation.showUsage(for: providerID)
+        XCTAssertEqual(navigation.section, .usage)
+        XCTAssertNil(navigation.editingProviderID)
+        XCTAssertEqual(navigation.usageProviderFilter, providerID)
+
+        navigation.show(.settings)
+        XCTAssertEqual(navigation.section, .settings)
+        XCTAssertNil(navigation.usageProviderFilter)
+    }
+
     func testURLValidationNormalizesAndRejectsProxyLoop() throws {
         let normalized = try ProviderURLValidator.normalize(" HTTPS://relay.example/v1/ ", proxyPort: 17891)
         XCTAssertEqual(normalized, "https://relay.example/v1")

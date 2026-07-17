@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 struct MenuBarContent: View {
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     let model: AppModel
+    let navigation: MainNavigation
 
     var body: some View {
         Label(model.status.title, systemImage: model.status.symbolName)
@@ -26,18 +26,9 @@ struct MenuBarContent: View {
             }
         }
 
-        Divider()
+        if !model.isRunning && (model.configuration != nil || model.activeProvider != nil) {
+            Divider()
 
-        if model.isRunning {
-            Button("运行生图自检") {
-                model.runSelfTest()
-            }
-            .disabled(model.status == .testing)
-
-            Button("停用并恢复") {
-                model.disableAndRestore()
-            }
-        } else if model.configuration != nil || model.activeProvider != nil {
             Button("启动本地代理") {
                 model.applyAndStart()
             }
@@ -45,19 +36,8 @@ struct MenuBarContent: View {
 
         Divider()
 
-        Button("打开管理中心…") {
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            openWindow(id: "management")
-        }
-
-        Button("设置…") {
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            openSettings()
-        }
-        .keyboardShortcut(",")
-
-        Button("打开日志") {
-            model.openLogs()
+        Button("打开主界面…") {
+            openMain(.providers)
         }
 
         Divider()
@@ -70,5 +50,11 @@ struct MenuBarContent: View {
 
     private func shortTitle(_ title: String) -> String {
         title.count <= 30 ? title : String(title.prefix(27)) + "..."
+    }
+
+    private func openMain(_ section: MainSection) {
+        navigation.show(section)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        openWindow(id: "main")
     }
 }

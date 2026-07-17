@@ -30,18 +30,17 @@ xattr -dr com.apple.quarantine "/Applications/GPTSwitch.app"
 open "/Applications/GPTSwitch.app"
 ```
 
-GPTSwitch 是菜单栏工具，不显示 Dock 图标。启用代理后会自动注册登录启动，也可以在设置中关闭。
+GPTSwitch 是菜单栏工具，不显示 Dock 图标。点击菜单栏中的“打开主界面”可进入统一控制台，在同一窗口管理代理、Provider、使用统计和设置。启用代理后会自动注册登录启动，也可以在设置中关闭。
 
 ## 使用
 
-菜单栏提供以下操作：
+主界面和菜单栏提供以下操作：
 
 - 通过状态栏中的 GPTSwitch 单色 Logo 颜色查看代理运行状态。
-- 打开管理中心，添加、编辑、复制、排序和快速切换第三方 Provider。
-- 对 Provider 执行端点测速与真实模型自检。
+- 在卡片列表中添加、编辑、复制、排序和快速切换第三方 Provider。
+- 在 Provider 详情中执行端点测速、真实模型自检和生图自检。
 - 查看 24 小时、7 天和 30 天请求、Token、延迟与估算成本统计。
 - 启动本地代理，或停用代理并恢复原上游地址。
-- 运行一次真实生图自检。
 - 打开设置和运行日志。
 
 Provider 的 API Key 只保存在 macOS 钥匙串中。代理会在请求发往上游前注入密钥，数据库、日志和 Codex 配置中不会保存由 GPTSwitch 管理的 Key。

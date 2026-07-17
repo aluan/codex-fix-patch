@@ -321,6 +321,16 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
         try setSetting("retention_days", value: String(days))
     }
 
+    func proxyPort(default defaultPort: UInt16 = 17891) async throws -> UInt16 {
+        guard let value = try setting("proxy_port"),
+              let port = UInt16(value), port > 0 else { return defaultPort }
+        return port
+    }
+
+    func setProxyPort(_ port: UInt16) async throws {
+        try setSetting("proxy_port", value: String(port))
+    }
+
     private func estimateCost(
         usage: TokenUsage,
         model: String,
