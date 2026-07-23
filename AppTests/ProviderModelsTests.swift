@@ -42,6 +42,119 @@ final class ProviderModelsTests: XCTestCase {
         XCTAssertEqual(router.snapshot().profile.displayName, "Second")
     }
 
+    func testRouterAllowsDefaultSnapshotInSnapshotList() {
+        let defaultProvider = snapshot(name: "Default", token: "current-token")
+        let staleDefault = ActiveProviderSnapshot(
+            profile: defaultProvider.profile,
+            bearerToken: "stale-token"
+        )
+        let other = snapshot(name: "Other", token: "other-token")
+        let router = ActiveProviderRouter(
+            snapshot: defaultProvider,
+            snapshots: [staleDefault, other]
+        )
+
+        XCTAssertEqual(router.allSnapshots().count, 2)
+        XCTAssertEqual(router.snapshot().bearerToken, "current-token")
+
+        router.update(default: defaultProvider, snapshots: [other, staleDefault])
+
+        XCTAssertEqual(router.allSnapshots().count, 2)
+        XCTAssertEqual(router.snapshot().bearerToken, "current-token")
+    }
+
+    func testRouterSelectsProviderAndRestoresNativeModelID() throws {
+        let defaultProvider = snapshot(
+            configName: "openai",
+            name: "OpenAI",
+            model: "gpt-5.5",
+            token: "openai-token"
+        )
+        let anthropic = snapshot(
+            configName: "anthropic",
+            name: "Anthropic",
+            model: "anthropic/claude-sonnet-4-6",
+            token: "anthropic-token"
+        )
+        let router = ActiveProviderRouter(
+            snapshot: defaultProvider,
+            snapshots: [anthropic],
+            allowsCrossProviderRouting: true
+        )
+
+        let routed = try router.route(model: "anthropic/anthropic-claude-sonnet-4-6")
+
+        XCTAssertEqual(routed.profile.configName, "anthropic")
+        XCTAssertEqual(routed.inferenceModel, "anthropic/claude-sonnet-4-6")
+        XCTAssertEqual(
+            try router.route(model: "anthropic/anthropic/claude-sonnet-4-6").inferenceModel,
+            "anthropic/claude-sonnet-4-6"
+        )
+        XCTAssertEqual(try router.route(model: "gpt-5.5").profile.configName, "openai")
+    }
+
+    func testRouterRestrictsModelsToCurrentProviderByDefault() throws {
+        let current = snapshot(
+            configName: "openai",
+            name: "OpenAI",
+            model: "gpt-5.5",
+            token: "openai-token"
+        )
+        let other = snapshot(
+            configName: "anthropic",
+            name: "Anthropic",
+            model: "claude-sonnet-4-6",
+            token: "anthropic-token"
+        )
+        let router = ActiveProviderRouter(snapshot: current, snapshots: [other])
+
+        XCTAssertEqual(try router.route(model: "openai/gpt-5.5").profile.configName, "openai")
+        XCTAssertThrowsError(try router.route(model: "anthropic/claude-sonnet-4-6")) { error in
+            XCTAssertEqual(
+                error as? ProviderRoutingError,
+                .modelUnavailableForCurrentProvider("anthropic/claude-sonnet-4-6", "OpenAI")
+            )
+        }
+
+        router.setAllowsCrossProviderRouting(true)
+        XCTAssertEqual(
+            try router.route(model: "anthropic/claude-sonnet-4-6").profile.configName,
+            "anthropic"
+        )
+    }
+
+    func testRouterRequiresPrefixForAmbiguousBareModel() {
+        let first = snapshot(configName: "first", name: "First", model: "shared", token: "one")
+        let second = snapshot(configName: "second", name: "Second", model: "shared", token: "two")
+        let defaultProvider = snapshot(configName: "default", name: "Default", model: "other", token: "default")
+        let router = ActiveProviderRouter(
+            snapshot: defaultProvider,
+            snapshots: [first, second],
+            allowsCrossProviderRouting: true
+        )
+
+        XCTAssertThrowsError(try router.route(model: "shared")) { error in
+            XCTAssertEqual(error as? ProviderRoutingError, .ambiguousModel("shared"))
+        }
+        XCTAssertEqual(try? router.route(model: "second/shared").profile.configName, "second")
+    }
+
+    func testChatProviderRequiresInferenceModelInsteadOfBridgeModel() throws {
+        let valid = ProviderProfile(
+            configName: "chat",
+            displayName: "Chat",
+            baseURL: "https://chat.example/v1",
+            bridgeModel: "",
+            wireProtocol: .chatCompletions,
+            inferenceModel: "relay-opus"
+        )
+        XCTAssertNoThrow(try valid.validated(proxyPort: 17891))
+
+        var invalid = valid
+        invalid.inferenceModel = ""
+        XCTAssertThrowsError(try invalid.validated(proxyPort: 17891))
+    }
+
     func testAuthorizerReplacesBearerTokenWithoutPersistingItInProfile() {
         let provider = snapshot(name: "Relay", token: "new-secret")
         var request = URLRequest(url: URL(string: "https://relay.example/v1/responses")!)
@@ -60,6 +173,31 @@ final class ProviderModelsTests: XCTestCase {
                 displayName: name,
                 baseURL: "https://\(name.lowercased()).example/v1",
                 bridgeModel: "gpt-5"
+            ),
+            bearerToken: token
+        )
+    }
+
+    private func snapshot(
+        configName: String,
+        name: String,
+        model: String,
+        token: String
+    ) -> ActiveProviderSnapshot {
+        let providerID = UUID()
+        return ActiveProviderSnapshot(
+            profile: ProviderProfile(
+                id: providerID,
+                configName: configName,
+                displayName: name,
+                baseURL: "https://relay.example/v1",
+                bridgeModel: model,
+                inferenceModel: model,
+                models: [ProviderModelRoute(
+                    providerID: providerID,
+                    modelID: model,
+                    displayName: model
+                )]
             ),
             bearerToken: token
         )

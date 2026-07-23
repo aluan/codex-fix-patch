@@ -356,7 +356,8 @@ private struct ProviderCardRow: View {
 
             Menu {
                 Button("端点测速") { model.measureProvider(provider.id) }
-                Button("模型自检") { model.testProviderModel(provider.id) }
+                Button("工具兼容性") { model.testProviderModel(provider.id) }
+                    .help("要求模型返回原生结构化工具调用；文本 XML/JSON 不通过")
                 Button("生图自检") { model.runSelfTest(for: provider.id) }
                     .disabled(!model.canRunImageSelfTest(for: provider.id))
             } label: {
@@ -416,11 +417,28 @@ private struct ProviderCardRow: View {
     }
 }
 
+private enum ProviderCreationTemplate: String, CaseIterable {
+    case responses
+    case compatibleChat
+    case compatibleAnthropic
+    case anthropicAPI
+
+    var title: String {
+        switch self {
+        case .responses: "Responses 中转站"
+        case .compatibleChat: "通用 Chat Completions"
+        case .compatibleAnthropic: "Anthropic Messages 中转站"
+        case .anthropicAPI: "Anthropic 官方 API"
+        }
+    }
+}
+
 private struct ProviderCreateView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var model: AppModel
     let onCreated: (UUID) -> Void
     @State private var draft: ProviderProfile
+    @State private var template: ProviderCreationTemplate = .responses
     @State private var apiKey = ""
     @State private var isSaving = false
 
@@ -428,19 +446,34 @@ private struct ProviderCreateView: View {
         self.model = model
         self.onCreated = onCreated
         let index = model.providers.count + 1
-        _draft = State(initialValue: ProviderProfile(
+        var profile = ProviderProfile(
             configName: "provider-\(index)",
             displayName: "新 Provider",
             baseURL: "https://api.example.com/v1",
             bridgeModel: model.activeProvider?.bridgeModel ?? "gpt-5",
             sortOrder: model.providers.count
-        ))
+        )
+        profile.models = [ProviderModelRoute(
+            providerID: profile.id,
+            modelID: profile.bridgeModel,
+            displayName: profile.bridgeModel,
+            inputModalities: ["text", "image"]
+        )]
+        _draft = State(initialValue: profile)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("添加 Provider")
                 .font(.title2.weight(.semibold))
+            Picker("配置模板", selection: $template) {
+                ForEach(ProviderCreationTemplate.allCases, id: \.self) { template in
+                    Text(template.title).tag(template)
+                }
+            }
+            .onChange(of: template) {
+                applyTemplate(template)
+            }
             ProviderEditorForm(draft: $draft, apiKey: $apiKey, hasStoredCredential: false)
             if let error = model.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -469,5 +502,52 @@ private struct ProviderCreateView: View {
         .padding(24)
         .frame(width: 560)
         .interactiveDismissDisabled(isSaving)
+    }
+
+    private func applyTemplate(_ template: ProviderCreationTemplate) {
+        switch template {
+        case .responses:
+            draft.displayName = "Responses Provider"
+            draft.baseURL = "https://api.example.com/v1"
+            draft.wireProtocol = .responses
+            draft.chatDialect = .standard
+            draft.inferenceModel = ""
+            if draft.bridgeModel.isEmpty { draft.bridgeModel = model.activeProvider?.bridgeModel ?? "gpt-5" }
+            draft.website = ""
+        case .compatibleChat:
+            draft.displayName = "Chat Provider"
+            draft.baseURL = "https://api.example.com/v1"
+            draft.wireProtocol = .chatCompletions
+            draft.chatDialect = .standard
+            draft.inferenceModel = ""
+            draft.bridgeModel = ""
+            draft.website = ""
+        case .compatibleAnthropic:
+            draft.displayName = "Claude Relay"
+            draft.baseURL = "https://api.example.com/v1"
+            draft.wireProtocol = .anthropicMessages
+            draft.chatDialect = .standard
+            draft.inferenceModel = ""
+            draft.bridgeModel = ""
+            draft.credentialMode = .keychainBearer
+            draft.website = ""
+        case .anthropicAPI:
+            draft.displayName = "Anthropic"
+            draft.baseURL = "https://api.anthropic.com"
+            draft.wireProtocol = .anthropicMessages
+            draft.chatDialect = .standard
+            draft.inferenceModel = "claude-sonnet-4-6"
+            draft.bridgeModel = ""
+            draft.credentialMode = .keychainAPIKey
+            draft.website = "https://console.anthropic.com"
+        }
+        draft.testModel = ""
+        let defaultModel = draft.wireProtocol == .responses ? draft.bridgeModel : draft.inferenceModel
+        draft.models = defaultModel.isEmpty ? [] : [ProviderModelRoute(
+            providerID: draft.id,
+            modelID: defaultModel,
+            displayName: defaultModel,
+            inputModalities: draft.wireProtocol == .responses ? ["text", "image"] : ["text"]
+        )]
     }
 }

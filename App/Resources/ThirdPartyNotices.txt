@@ -26,3 +26,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+lidge-jun/opencodex
+https://github.com/lidge-jun/opencodex
+
+GPTSwitch's three-protocol adapter layering and event bridge design were
+informed by opencodex. GPTSwitch uses an independent native Swift
+implementation and does not distribute opencodex source code or runtime.
+
+MIT License
+Copyright (c) lidge-jun and contributors
