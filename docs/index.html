@@ -52,11 +52,11 @@
         <div class="hero-copy">
           <p class="eyebrow reveal" style="--delay: 40ms">
             <span class="pulse-dot"></span>
-            解决第三方 Provider 生图 404
+            把第三方模型接进 Codex
           </p>
-          <h1 class="reveal" style="--delay: 100ms">让你的 Provider，<br>在 Codex 里<span>正常生图。</span></h1>
+          <h1 class="reveal" style="--delay: 100ms">让第三方模型，<br>在 Codex 里<span>自由调用。</span></h1>
           <p class="hero-lede reveal" style="--delay: 180ms">
-            在 Mac 本机把 Codex 的 Images API 自动桥接到 Provider 支持的 Responses <code>image_generation</code>，再用一个原生控制台管理连接、用量与主题。
+            在 Mac 本机把 Claude、GLM、Qwen、DeepSeek、Kimi 等第三方模型接进 Codex，自动桥接 Responses、Anthropic Messages 与 Chat Completions 协议（含生图接口），再用一个原生控制台管理连接、用量与主题。
           </p>
           <div class="hero-actions reveal" style="--delay: 250ms">
             <a class="button button-primary" href="https://github.com/aluan/GPTSwitch/releases/latest">
@@ -142,7 +142,7 @@
 
     <section class="trust-strip" aria-label="产品特性摘要">
       <div class="shell trust-grid">
-        <div><span>01</span><strong>第三方生图可用</strong><small>自动桥接 Images 与 Responses</small></div>
+        <div><span>01</span><strong>第三方模型可用</strong><small>Claude / GLM / Qwen / DeepSeek / Kimi 接入</small></div>
         <div><span>02</span><strong>只在本机运行</strong><small>仅监听 127.0.0.1</small></div>
         <div><span>03</span><strong>密钥进钥匙串</strong><small>不落日志与配置文件</small></div>
         <div><span>04</span><strong>不修改 Codex</strong><small>升级后无需重新打补丁</small></div>
@@ -153,16 +153,16 @@
       <div class="shell">
         <div class="section-heading reveal-on-scroll">
           <p class="kicker">一个控制台，四种能力</p>
-          <h2>先让生图跑通，<br>再把连接管好。</h2>
-          <p>GPTSwitch 解决新版 Codex 与部分 Provider 之间的生图协议缺口，并把散落在配置文件和终端里的管理操作收进原生界面。</p>
+          <h2>第三方模型接进 Codex，<br>连接与生图一并管好。</h2>
+          <p>GPTSwitch 让 Codex 直接调用第三方模型，补齐 Responses 与部分 Provider 之间的协议缺口，并把散落在配置文件和终端里的管理操作收进原生界面。</p>
         </div>
 
         <div class="bento-grid">
           <article class="feature-card feature-provider reveal-on-scroll">
             <div class="card-copy">
               <span class="feature-index">01 / PROVIDERS</span>
-              <h3>Provider，随手切换</h3>
-              <p>添加、复制、排序与快速切换第三方 Provider，并在切换前完成端点测速和模型自检。</p>
+              <h3>模型与 Provider，随手切换</h3>
+              <p>添加、复制、排序与快速切换第三方 Provider 与模型；切换 Provider 不必重启 Codex，模型列表实时刷新，并在切换前完成端点测速和模型自检。</p>
             </div>
             <div class="provider-stack" aria-hidden="true">
               <div><i class="provider-mark orange">O</i><span><b>Production</b><small>当前连接</small></span><em></em></div>
