@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://gptswitch-sq41818iem-88qgx8yuj6.preview.iga-pages.com/">官网</a> ·
+  <a href="https://aluan.github.io/GPTSwitch/">官网</a> ·
   <a href="https://github.com/aluan/GPTSwitch/releases/latest">下载</a>
 </p>
 
