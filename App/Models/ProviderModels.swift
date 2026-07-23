@@ -282,6 +282,7 @@ enum ProviderValidationError: LocalizedError {
     case missingName
     case missingConfigName
     case invalidConfigName
+    case duplicateConfigName
     case missingBridgeModel
     case missingInferenceModel
     case missingModelRouteID
@@ -298,6 +299,7 @@ enum ProviderValidationError: LocalizedError {
         case .missingName: "Provider 名称不能为空"
         case .missingConfigName: "Provider 配置标识不能为空"
         case .invalidConfigName: "Provider 配置标识只能包含字母、数字、下划线和连字符"
+        case .duplicateConfigName: "该配置标识已被其他 Provider 占用，请改为唯一标识"
         case .missingBridgeModel: "桥接模型不能为空"
         case .missingInferenceModel: "Chat Provider 的推理模型不能为空"
         case .missingModelRouteID: "模型 ID 不能为空"

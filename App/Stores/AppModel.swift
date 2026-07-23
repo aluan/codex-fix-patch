@@ -309,6 +309,11 @@ final class AppModel {
             lastError = nil
             let port = UInt16(editablePort) ?? configuration?.port ?? 17891
             let provider = try draft.validated(proxyPort: port)
+            // configName 被用作跨 Provider 路由的对外标识（catalog slug 前缀与
+            // provider/model 路由查找），重复会导致路由命中错误 Provider。
+            if providers.contains(where: { $0.id != provider.id && $0.configName == provider.configName }) {
+                throw ProviderValidationError.duplicateConfigName
+            }
             if let apiKey, !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 try credentialStore.setToken(apiKey, for: provider.id)
             }

@@ -215,7 +215,14 @@ struct ProviderEditorForm: View {
                 TextField("Provider 名称", text: $draft.displayName)
             }
             row("配置标识") {
-                TextField("provider-id", text: $draft.configName)
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("唯一标识，如 aigocode-claude", text: $draft.configName)
+                        .autocorrectionDisabled()
+                    Text("需唯一，用作跨 Provider 路由标识。开启后可用「标识/模型名」指定其他 Provider；服务商名请填到「显示名称」。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             row("API 地址") {
                 TextField("https://api.example.com/v1", text: $draft.baseURL)
