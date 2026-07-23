@@ -49,8 +49,9 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
         INSERT INTO providers (
             id, config_name, display_name, base_url, bridge_model, test_model, note, website,
             sort_order, credential_mode, cost_multiplier, health_state, health_latency_ms,
-            health_error, last_checked_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            health_error, last_checked_at, created_at, updated_at, wire_protocol, chat_dialect,
+            inference_model
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             config_name = excluded.config_name,
             display_name = excluded.display_name,
@@ -66,6 +67,9 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
             health_latency_ms = excluded.health_latency_ms,
             health_error = excluded.health_error,
             last_checked_at = excluded.last_checked_at,
+            wire_protocol = excluded.wire_protocol,
+            chat_dialect = excluded.chat_dialect,
+            inference_model = excluded.inference_model,
             updated_at = excluded.updated_at
         """
         let statement = try prepare(sql)
@@ -87,7 +91,11 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
         bind(provider.lastCheckedAt?.timeIntervalSince1970, at: 15, in: statement)
         sqlite3_bind_double(statement, 16, provider.createdAt.timeIntervalSince1970)
         sqlite3_bind_double(statement, 17, provider.updatedAt.timeIntervalSince1970)
+        bind(provider.wireProtocol.rawValue, at: 18, in: statement)
+        bind(provider.chatDialect.rawValue, at: 19, in: statement)
+        bind(provider.inferenceModel, at: 20, in: statement)
         try stepDone(statement)
+        try replaceModelRoutes(for: provider)
     }
 
     func deleteProvider(id: UUID) async throws {
@@ -321,6 +329,14 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
         try setSetting("retention_days", value: String(days))
     }
 
+    func crossProviderRoutingEnabled() async throws -> Bool {
+        try setting("cross_provider_routing_enabled") == "1"
+    }
+
+    func setCrossProviderRoutingEnabled(_ enabled: Bool) async throws {
+        try setSetting("cross_provider_routing_enabled", value: enabled ? "1" : "0")
+    }
+
     func proxyPort(default defaultPort: UInt16 = 17891) async throws -> UInt16 {
         guard let value = try setting("proxy_port"),
               let port = UInt16(value), port > 0 else { return defaultPort }
@@ -504,7 +520,8 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
         let statement = try prepare("""
         SELECT id, config_name, display_name, base_url, bridge_model, test_model, note, website,
                sort_order, credential_mode, cost_multiplier, health_state, health_latency_ms,
-               health_error, last_checked_at, created_at, updated_at
+               health_error, last_checked_at, created_at, updated_at, wire_protocol, chat_dialect,
+               inference_model
         FROM providers ORDER BY sort_order, created_at
         """)
         defer { sqlite3_finalize(statement) }
@@ -516,13 +533,19 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
                   let baseURL = string(statement, 3),
                   let bridgeModel = string(statement, 4),
                   let credentialMode = string(statement, 9).flatMap(ProviderCredentialMode.init(rawValue:)),
-                  let healthState = string(statement, 11).flatMap(ProviderHealthState.init(rawValue:)) else { continue }
+                  let healthState = string(statement, 11).flatMap(ProviderHealthState.init(rawValue:)),
+                  let wireProtocol = string(statement, 17).flatMap(ProviderWireProtocol.init(rawValue:)),
+                  let chatDialect = string(statement, 18).flatMap(ChatCompletionsDialect.init(rawValue:)) else { continue }
             output.append(ProviderProfile(
                 id: id,
                 configName: configName,
                 displayName: displayName,
                 baseURL: baseURL,
                 bridgeModel: bridgeModel,
+                wireProtocol: wireProtocol,
+                chatDialect: chatDialect,
+                inferenceModel: string(statement, 19) ?? "",
+                models: try queryModelRoutes(providerID: id),
                 testModel: string(statement, 5) ?? "",
                 note: string(statement, 6) ?? "",
                 website: string(statement, 7) ?? "",
@@ -538,6 +561,77 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
             ))
         }
         return output
+    }
+
+    private func replaceModelRoutes(for provider: ProviderProfile) throws {
+        let delete = try prepare("DELETE FROM provider_models WHERE provider_id = ?")
+        defer { sqlite3_finalize(delete) }
+        bind(provider.id.uuidString, at: 1, in: delete)
+        try stepDone(delete)
+        guard !provider.models.isEmpty else { return }
+
+        let insert = try prepare("""
+        INSERT INTO provider_models (
+            id, provider_id, model_id, display_name, model_description, reasoning_efforts,
+            default_reasoning_effort, input_modalities, is_enabled, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """)
+        defer { sqlite3_finalize(insert) }
+        for route in provider.models {
+            sqlite3_reset(insert)
+            sqlite3_clear_bindings(insert)
+            bind(route.id.uuidString, at: 1, in: insert)
+            bind(provider.id.uuidString, at: 2, in: insert)
+            bind(route.modelID, at: 3, in: insert)
+            bind(route.displayName, at: 4, in: insert)
+            bind(route.modelDescription, at: 5, in: insert)
+            bind(jsonString(route.reasoningEfforts), at: 6, in: insert)
+            bind(route.defaultReasoningEffort, at: 7, in: insert)
+            bind(jsonString(route.inputModalities), at: 8, in: insert)
+            sqlite3_bind_int(insert, 9, route.isEnabled ? 1 : 0)
+            sqlite3_bind_int(insert, 10, Int32(route.sortOrder))
+            try stepDone(insert)
+        }
+    }
+
+    private func queryModelRoutes(providerID: UUID) throws -> [ProviderModelRoute] {
+        let statement = try prepare("""
+        SELECT id, model_id, display_name, model_description, reasoning_efforts,
+               default_reasoning_effort, input_modalities, is_enabled, sort_order
+        FROM provider_models WHERE provider_id = ? ORDER BY sort_order, rowid
+        """)
+        defer { sqlite3_finalize(statement) }
+        bind(providerID.uuidString, at: 1, in: statement)
+        var output: [ProviderModelRoute] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let id = string(statement, 0).flatMap(UUID.init(uuidString:)),
+                  let modelID = string(statement, 1) else { continue }
+            output.append(ProviderModelRoute(
+                id: id,
+                providerID: providerID,
+                modelID: modelID,
+                displayName: string(statement, 2) ?? modelID,
+                modelDescription: string(statement, 3) ?? "",
+                reasoningEfforts: stringArray(statement, 4),
+                defaultReasoningEffort: string(statement, 5) ?? "",
+                inputModalities: stringArray(statement, 6),
+                isEnabled: sqlite3_column_int(statement, 7) != 0,
+                sortOrder: Int(sqlite3_column_int(statement, 8))
+            ))
+        }
+        return output
+    }
+
+    private func jsonString(_ strings: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(strings) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func stringArray(_ statement: OpaquePointer, _ index: Int32) -> [String] {
+        guard let value = string(statement, index),
+              let data = value.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return decoded
     }
 
     private func querySummary(cutoff: TimeInterval) throws -> UsageSummary {
@@ -939,11 +1033,96 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
                 INSERT INTO schema_migrations(version, applied_at) VALUES (2, strftime('%s', 'now'));
                 """, on: connection)
                 try execute("COMMIT", on: connection)
+                version = 2
             } catch {
                 try? execute("ROLLBACK", on: connection)
                 throw error
             }
         }
+        if version < 3 {
+            try execute("BEGIN IMMEDIATE", on: connection)
+            do {
+                if tableExists("providers", on: connection) {
+                    try execute("""
+                    ALTER TABLE providers ADD COLUMN wire_protocol TEXT NOT NULL DEFAULT 'responses';
+                    ALTER TABLE providers ADD COLUMN chat_dialect TEXT NOT NULL DEFAULT 'standard';
+                    ALTER TABLE providers ADD COLUMN inference_model TEXT NOT NULL DEFAULT '';
+                    """, on: connection)
+                }
+                try execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (3, strftime('%s', 'now'))",
+                    on: connection
+                )
+                try execute("COMMIT", on: connection)
+                version = 3
+            } catch {
+                try? execute("ROLLBACK", on: connection)
+                throw error
+            }
+        }
+        if version < 4 {
+            try execute("BEGIN IMMEDIATE", on: connection)
+            do {
+                try execute("""
+                CREATE TABLE provider_models (
+                    id TEXT PRIMARY KEY,
+                    provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+                    model_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL DEFAULT '',
+                    model_description TEXT NOT NULL DEFAULT '',
+                    reasoning_efforts TEXT NOT NULL DEFAULT '[]',
+                    default_reasoning_effort TEXT NOT NULL DEFAULT '',
+                    input_modalities TEXT NOT NULL DEFAULT '["text"]',
+                    is_enabled INTEGER NOT NULL DEFAULT 1,
+                    sort_order INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX provider_models_provider_idx ON provider_models(provider_id, sort_order);
+                """, on: connection)
+                if tableExists("providers", on: connection) {
+                    try execute("""
+                    INSERT INTO provider_models (
+                        id, provider_id, model_id, display_name, reasoning_efforts,
+                        default_reasoning_effort, input_modalities, is_enabled, sort_order
+                    )
+                    SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+                           substr(lower(hex(randomblob(2))), 2) || '-' ||
+                           substr('89ab', abs(random()) % 4 + 1, 1) ||
+                           substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+                           id,
+                           CASE WHEN inference_model <> '' THEN inference_model ELSE bridge_model END,
+                           CASE WHEN inference_model <> '' THEN inference_model ELSE bridge_model END,
+                           '["low","medium","high"]',
+                           'medium',
+                           CASE WHEN wire_protocol = 'responses' THEN '["text","image"]' ELSE '["text"]' END,
+                           1,
+                           0
+                    FROM providers
+                    WHERE CASE WHEN inference_model <> '' THEN inference_model ELSE bridge_model END <> '';
+                    """, on: connection)
+                }
+                try execute("""
+                INSERT INTO schema_migrations(version, applied_at) VALUES (4, strftime('%s', 'now'));
+                """, on: connection)
+                try execute("COMMIT", on: connection)
+            } catch {
+                try? execute("ROLLBACK", on: connection)
+                throw error
+            }
+        }
+    }
+
+    private static func tableExists(_ name: String, on connection: OpaquePointer) -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            connection,
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, name, -1, transient)
+        return sqlite3_step(statement) == SQLITE_ROW
     }
 }
 

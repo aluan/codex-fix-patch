@@ -9,6 +9,7 @@ struct ProviderDetailView: View {
     @State private var showingDeleteConfirmation = false
     @State private var isSaving = false
     @State private var isDeleting = false
+    @State private var isDiscovering = false
 
     init(model: AppModel, provider: ProviderProfile, onDeleted: @escaping () -> Void) {
         self.model = model
@@ -25,7 +26,9 @@ struct ProviderDetailView: View {
                     ProviderEditorForm(
                         draft: $draft,
                         apiKey: $apiKey,
-                        hasStoredCredential: model.providerHasCredential(provider.id)
+                        hasStoredCredential: model.providerHasCredential(provider.id),
+                        isDiscovering: isDiscovering,
+                        onDiscoverModels: discoverModels
                     )
                     .padding(.top, 4)
                 }
@@ -101,7 +104,8 @@ struct ProviderDetailView: View {
                     .controlSize(.small)
                     .opacity(isChecking ? 1 : 0)
                 Button("端点测速") { model.measureProvider(provider.id) }
-                Button("模型自检") { model.testProviderModel(provider.id) }
+                Button("工具兼容性") { model.testProviderModel(provider.id) }
+                    .help("要求模型返回原生结构化工具调用；文本 XML/JSON 不通过")
                 Button("生图自检") { model.runSelfTest(for: provider.id) }
                     .disabled(!model.canRunImageSelfTest(for: provider.id))
                     .help(imageSelfTestHelp)
@@ -121,6 +125,9 @@ struct ProviderDetailView: View {
     }
 
     private var imageSelfTestHelp: String {
+        if !provider.supportsImageBridge {
+            return "当前 Provider 协议不支持 Images API"
+        }
         if provider.id != model.activeProviderID {
             return "请先启用此 Provider"
         }
@@ -182,39 +189,76 @@ struct ProviderDetailView: View {
             }
         }
     }
+
+    private func discoverModels() {
+        isDiscovering = true
+        Task {
+            if let routes = await model.discoverProviderModels(provider.id) {
+                draft.models = routes
+            }
+            isDiscovering = false
+        }
+    }
 }
 
 struct ProviderEditorForm: View {
     @Binding var draft: ProviderProfile
     @Binding var apiKey: String
     let hasStoredCredential: Bool
+    var isDiscovering = false
+    var onDiscoverModels: (() -> Void)? = nil
 
     var body: some View {
-        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
             row("显示名称") {
                 TextField("Provider 名称", text: $draft.displayName)
             }
             row("配置标识") {
                 TextField("provider-id", text: $draft.configName)
             }
-            row("Responses 地址") {
+            row("API 地址") {
                 TextField("https://api.example.com/v1", text: $draft.baseURL)
             }
-            row("桥接模型") {
-                TextField("gpt-5", text: $draft.bridgeModel)
+            row("API 协议") {
+                Picker("", selection: $draft.wireProtocol) {
+                    ForEach(ProviderWireProtocol.allCases, id: \.self) { wireProtocol in
+                        Text(wireProtocol.title).tag(wireProtocol)
+                    }
+                }
+                .labelsHidden()
+            }
+            if draft.wireProtocol != .responses {
+                if draft.wireProtocol == .chatCompletions {
+                    row("兼容类型") {
+                        Picker("", selection: $draft.chatDialect) {
+                            ForEach(ChatCompletionsDialect.allCases, id: \.self) { dialect in
+                                Text(dialect.title).tag(dialect)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+                }
+                row("推理模型") {
+                    TextField(draft.wireProtocol == .anthropicMessages ? "claude-opus-4-8" : "model-id", text: $draft.inferenceModel)
+                }
+            } else {
+                row("桥接模型") {
+                    TextField("gpt-5", text: $draft.bridgeModel)
+                }
             }
             row("测试模型") {
-                TextField("留空则使用桥接模型", text: $draft.testModel)
+                TextField("留空则使用当前模型", text: $draft.testModel)
             }
             row("认证方式") {
                 Picker("", selection: $draft.credentialMode) {
-                    ForEach(ProviderCredentialMode.allCases, id: \.self) { mode in
+                    ForEach(availableCredentialModes, id: \.self) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
                 .labelsHidden()
             }
-            if draft.credentialMode == .keychainBearer {
+            if draft.credentialMode == .keychainBearer || draft.credentialMode == .keychainAPIKey {
                 row("API Key") {
                     VStack(alignment: .leading, spacing: 4) {
                         SecureField(hasStoredCredential ? "留空以保留现有密钥" : "输入 API Key", text: $apiKey)
@@ -235,6 +279,14 @@ struct ProviderEditorForm: View {
                 TextField("用途、套餐或到期时间", text: $draft.note, axis: .vertical)
                     .lineLimit(2...4)
             }
+            }
+            Divider()
+            ProviderModelsEditor(
+                providerID: draft.id,
+                routes: $draft.models,
+                isDiscovering: isDiscovering,
+                onDiscover: onDiscoverModels
+            )
         }
     }
 
@@ -245,5 +297,104 @@ struct ProviderEditorForm: View {
                 .frame(width: 96, alignment: .trailing)
             content()
         }
+    }
+
+    private var availableCredentialModes: [ProviderCredentialMode] {
+        switch draft.wireProtocol {
+        case .responses, .chatCompletions:
+            return [.keychainBearer, .passthrough]
+        case .anthropicMessages:
+            return [.keychainAPIKey, .keychainBearer, .passthrough]
+        }
+    }
+}
+
+private struct ProviderModelsEditor: View {
+    let providerID: UUID
+    @Binding var routes: [ProviderModelRoute]
+    let isDiscovering: Bool
+    let onDiscover: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Codex 模型目录")
+                        .font(.headline)
+                    Text("选择器使用 provider/model；上游仍收到原始模型 ID。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let onDiscover {
+                    Button("从 /models 刷新", action: onDiscover)
+                        .disabled(isDiscovering)
+                }
+                Button("添加模型") { addRoute() }
+            }
+            if routes.isEmpty {
+                Text("未单独登记模型，将使用上方默认模型生成兼容目录项。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            }
+            ForEach($routes) { $route in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        TextField("上游模型 ID", text: $route.modelID)
+                        TextField("选择器显示名称", text: $route.displayName)
+                        Toggle("启用", isOn: $route.isEnabled)
+                            .toggleStyle(.checkbox)
+                        Button(role: .destructive) {
+                            routes.removeAll { $0.id == route.id }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    HStack {
+                        TextField("推理档位：low, medium, high", text: reasoningBinding($route))
+                        TextField("默认档位", text: $route.defaultReasoningEffort)
+                            .frame(width: 100)
+                        Toggle("图片输入", isOn: imageBinding($route))
+                            .toggleStyle(.checkbox)
+                    }
+                    TextField("模型说明（可选）", text: $route.modelDescription)
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
+    private func addRoute() {
+        routes.append(ProviderModelRoute(
+            providerID: providerID,
+            modelID: "",
+            reasoningEfforts: ["low", "medium", "high"],
+            sortOrder: routes.count
+        ))
+    }
+
+    private func reasoningBinding(_ route: Binding<ProviderModelRoute>) -> Binding<String> {
+        Binding(
+            get: { route.wrappedValue.reasoningEfforts.joined(separator: ", ") },
+            set: { value in
+                route.wrappedValue.reasoningEfforts = value
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            }
+        )
+    }
+
+    private func imageBinding(_ route: Binding<ProviderModelRoute>) -> Binding<Bool> {
+        Binding(
+            get: { route.wrappedValue.inputModalities.contains("image") },
+            set: { enabled in
+                route.wrappedValue.inputModalities.removeAll { $0 == "image" }
+                if enabled { route.wrappedValue.inputModalities.append("image") }
+            }
+        )
     }
 }

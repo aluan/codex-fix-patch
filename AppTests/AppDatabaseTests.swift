@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import XCTest
 @testable import GPTSwitch
 
@@ -18,6 +19,54 @@ final class AppDatabaseTests: XCTestCase {
         let reopened = try AppDatabase(url: databaseURL)
         let persistedPort = try await reopened.proxyPort()
         XCTAssertEqual(persistedPort, 23456)
+    }
+
+    func testCrossProviderRoutingDefaultsOffAndPersists() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("test.sqlite3")
+        let database = try AppDatabase(url: databaseURL)
+
+        let defaultValue = try await database.crossProviderRoutingEnabled()
+        XCTAssertFalse(defaultValue)
+        try await database.setCrossProviderRoutingEnabled(true)
+
+        let reopened = try AppDatabase(url: databaseURL)
+        let persistedValue = try await reopened.crossProviderRoutingEnabled()
+        XCTAssertTrue(persistedValue)
+    }
+
+    func testPersistsProviderModelRoutes() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("test.sqlite3")
+        let database = try AppDatabase(url: databaseURL)
+        let providerID = UUID()
+        let provider = ProviderProfile(
+            id: providerID,
+            configName: "anthropic",
+            displayName: "Anthropic",
+            baseURL: "https://api.anthropic.com",
+            bridgeModel: "",
+            wireProtocol: .anthropicMessages,
+            inferenceModel: "claude-sonnet-4-6",
+            models: [ProviderModelRoute(
+                providerID: providerID,
+                modelID: "anthropic/claude-sonnet-4-6",
+                displayName: "Claude Sonnet",
+                reasoningEfforts: ["low", "high"],
+                defaultReasoningEffort: "high",
+                inputModalities: ["text", "image"]
+            )]
+        )
+
+        try await database.saveProvider(provider)
+        let reopened = try AppDatabase(url: databaseURL)
+        let reopenedProviders = try await reopened.providers()
+        let stored = try XCTUnwrap(reopenedProviders.first)
+
+        XCTAssertEqual(stored.models, provider.models)
+        XCTAssertEqual(stored.models.first?.catalogID(providerConfigName: "anthropic"), "anthropic/anthropic-claude-sonnet-4-6")
     }
 
     func testPersistsAggregatesPricingAndRetention() async throws {
@@ -145,6 +194,76 @@ final class AppDatabaseTests: XCTestCase {
         try await database.deleteProvider(id: editable.id)
         providers = try await database.providers()
         XCTAssertEqual(providers.map(\.id), [active.id])
+    }
+
+    func testPersistsChatProviderConfiguration() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try AppDatabase(url: directory.appendingPathComponent("test.sqlite3"))
+        let provider = ProviderProfile(
+            configName: "glm",
+            displayName: "GLM",
+            baseURL: "https://open.bigmodel.cn/api/paas/v4",
+            bridgeModel: "",
+            wireProtocol: .chatCompletions,
+            chatDialect: .glm,
+            inferenceModel: "glm-5.2"
+        )
+
+        try await database.saveProvider(provider)
+        let providers = try await database.providers()
+        let stored = try XCTUnwrap(providers.first)
+
+        XCTAssertEqual(stored.wireProtocol, .chatCompletions)
+        XCTAssertEqual(stored.chatDialect, .glm)
+        XCTAssertEqual(stored.inferenceModel, "glm-5.2")
+        XCTAssertFalse(stored.supportsImageBridge)
+    }
+
+    func testMigratesLegacyProvidersToResponsesWithoutChangingOrderOrActiveProvider() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("legacy.sqlite3")
+        let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let activeID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        var connection: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &connection), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(connection, """
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);
+        INSERT INTO schema_migrations VALUES (2, strftime('%s', 'now'));
+        CREATE TABLE providers (
+            id TEXT PRIMARY KEY, config_name TEXT NOT NULL, display_name TEXT NOT NULL,
+            base_url TEXT NOT NULL, bridge_model TEXT NOT NULL, test_model TEXT NOT NULL DEFAULT '',
+            note TEXT NOT NULL DEFAULT '', website TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0, credential_mode TEXT NOT NULL,
+            cost_multiplier REAL NOT NULL DEFAULT 1, health_state TEXT NOT NULL DEFAULT 'unknown',
+            health_latency_ms INTEGER, health_error TEXT, last_checked_at REAL,
+            created_at REAL NOT NULL, updated_at REAL NOT NULL
+        );
+        CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO app_settings VALUES ('active_provider_id', '\(activeID.uuidString)');
+        INSERT INTO providers VALUES
+            ('\(activeID.uuidString)', 'active', 'Active', 'https://active.example/v1', 'gpt-active', '', '', '', 20, 'keychain_bearer', 1, 'healthy', NULL, NULL, NULL, 200, 200),
+            ('\(firstID.uuidString)', 'first', 'First', 'https://first.example/v1', 'gpt-first', '', '', '', 10, 'keychain_bearer', 1, 'unknown', NULL, NULL, NULL, 100, 100);
+        """, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(connection)
+
+        let database = try AppDatabase(url: databaseURL)
+        let providers = try await database.providers()
+        let activeProviderID = try await database.activeProviderID()
+
+        XCTAssertEqual(providers.map(\.id), [firstID, activeID])
+        XCTAssertEqual(providers.map(\.wireProtocol), [.responses, .responses])
+        XCTAssertEqual(providers.map(\.chatDialect), [.standard, .standard])
+        XCTAssertEqual(providers.map(\.inferenceModel), ["", ""])
+        XCTAssertEqual(providers.map { $0.models.first?.modelID }, ["gpt-first", "gpt-active"])
+        XCTAssertEqual(activeProviderID, activeID)
+
+        let reopened = try AppDatabase(url: databaseURL)
+        let reopenedProviders = try await reopened.providers()
+        let reopenedActiveProviderID = try await reopened.activeProviderID()
+        XCTAssertEqual(reopenedProviders, providers)
+        XCTAssertEqual(reopenedActiveProviderID, activeID)
     }
 
     private func temporaryDirectory() throws -> URL {

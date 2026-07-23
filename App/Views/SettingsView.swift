@@ -2,8 +2,32 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var model: AppModel
+    @State private var selectedPage = SettingsPage.general
 
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("设置页面", selection: $selectedPage) {
+                ForEach(SettingsPage.allCases) { page in
+                    Label(page.title, systemImage: page.systemImage)
+                        .tag(page)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 240)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+
+            switch selectedPage {
+            case .general:
+                generalSettings
+            case .about:
+                AboutSettingsView()
+            }
+        }
+    }
+
+    private var generalSettings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -56,6 +80,19 @@ struct SettingsView: View {
                     .padding(.top, 4)
                 }
 
+                GroupBox("模型路由") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("允许跨 Provider 路由", isOn: Binding(
+                            get: { model.crossProviderRoutingEnabled },
+                            set: { model.setCrossProviderRoutingEnabled($0) }
+                        ))
+                        Text("默认关闭。开启后可通过 provider/model 手动指定其他 Provider；Codex 模型菜单仍只显示当前 Provider。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                }
+
                 GroupBox("请求统计") {
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle("记录请求统计", isOn: Binding(
@@ -99,6 +136,74 @@ struct SettingsView: View {
             }
             .padding(24)
             .frame(maxWidth: 760, alignment: .leading)
+        }
+    }
+}
+
+private enum SettingsPage: String, CaseIterable, Identifiable {
+    case general
+    case about
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .general: "通用"
+        case .about: "关于"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general: "gearshape"
+        case .about: "info.circle"
+        }
+    }
+}
+
+private struct AboutSettingsView: View {
+    private let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    private let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Spacer(minLength: 48)
+
+            Image("MenuBarIcon")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 72, height: 72)
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+
+            Text("GPTSwitch")
+                .font(.largeTitle.weight(.semibold))
+
+            Text(versionText)
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            Text("本地模型协议转换与 Provider 路由工具")
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 48)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+    }
+
+    private var versionText: String {
+        let version = version?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let build = build?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch (version?.isEmpty == false ? version : nil, build?.isEmpty == false ? build : nil) {
+        case let (.some(version), .some(build)):
+            return "版本 \(version)（\(build)）"
+        case let (.some(version), nil):
+            return "版本 \(version)"
+        case (nil, _):
+            return "版本未知"
         }
     }
 }

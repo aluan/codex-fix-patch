@@ -2,8 +2,15 @@ import Foundation
 
 enum AppPaths {
     static let home = FileManager.default.homeDirectoryForCurrentUser
-    static let codexConfig = home.appendingPathComponent(".codex/config.toml")
+    static let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"]
+        .map { URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath) }
+        ?? home.appendingPathComponent(".codex")
+    static let codexConfig = codexHome.appendingPathComponent("config.toml")
     static let codexAuth = home.appendingPathComponent(".codex/auth.json")
+    static let codexModelCatalog = codexHome.appendingPathComponent("gptswitch-catalog.json")
+    static let codexModelsCache = codexHome.appendingPathComponent("models_cache.json")
+    static let codexCatalogState = codexHome.appendingPathComponent("gptswitch-catalog-state.json")
+    static let codexNativeCatalogBackup = codexHome.appendingPathComponent("gptswitch-native-catalog-backup.json")
     static let applicationSupport = home.appendingPathComponent("Library/Application Support/CodexImageGenProxy")
     static let state = applicationSupport.appendingPathComponent("state.json")
     static let database = applicationSupport.appendingPathComponent("gptswitch.sqlite3")

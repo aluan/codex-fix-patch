@@ -17,6 +17,7 @@ final class AppModel {
     private(set) var usageResult = UsageQueryResult()
     private(set) var statisticsEnabled = true
     private(set) var retentionDays = 90
+    private(set) var crossProviderRoutingEnabled = false
     private(set) var checkingProviderIDs: Set<UUID> = []
     private(set) var persistedProxyPort: UInt16 = 17891
     private(set) var skinThemes: [SkinTheme] = BuiltInSkinCatalog.themes
@@ -28,6 +29,7 @@ final class AppModel {
 
     private let stateStore = StateStore()
     private let configEditor = CodexConfigEditor()
+    private let modelCatalogService = CodexModelCatalogService()
     private let legacyMigrationService = LegacyMigrationService()
     private let providerMigrationService = ProviderMigrationService()
     private let loginItemService = LoginItemService()
@@ -133,15 +135,36 @@ final class AppModel {
             try await reloadProviders()
             statisticsEnabled = try await database.statisticsEnabled()
             retentionDays = try await database.retentionDays()
+            crossProviderRoutingEnabled = try await database.crossProviderRoutingEnabled()
             await bootstrapSkin(database: database)
             if retentionDays > 0 {
                 try await database.purgeUsage(olderThan: Date().addingTimeInterval(-Double(retentionDays) * 86_400))
             }
             await refreshUsage()
             if let saved, saved.isEnabled {
+                let candidate = try makeActiveSnapshot()
+                let result = await healthService.testModel(
+                    provider: candidate.profile,
+                    token: candidate.bearerToken
+                )
+                let verified = try await recordProviderHealth(result, provider: candidate.profile)
+                guard result.state != .unavailable else {
+                    try? configEditor.restore(saved)
+                    try? modelCatalogService.restore()
+                    var stopped = saved
+                    stopped.isEnabled = false
+                    configuration = stopped
+                    status = .stopped
+                    lastError = ProviderValidationError.incompatibleToolCalling(
+                        result.message ?? "原生工具调用探针失败"
+                    ).localizedDescription
+                    AppLog.error(lastError ?? "Provider tool compatibility check failed")
+                    return
+                }
                 try configEditor.activate(saved)
+                _ = try modelCatalogService.sync(provider: verified)
                 enableLoginItemIfPossible(refresh: saved.toolVersion != ProxyConfiguration.currentToolVersion)
-                let snapshot = try makeActiveSnapshot()
+                let snapshot = try makeSnapshot(for: verified)
                 startProxy(with: saved, snapshot: snapshot)
             } else {
                 status = saved == nil ? .notConfigured : .stopped
@@ -202,6 +225,7 @@ final class AppModel {
         stopProxy()
         do {
             if current.isEnabled { try configEditor.restore(current) }
+            try modelCatalogService.restore()
             current.isEnabled = false
             try stateStore.save(current)
             configuration = current
@@ -216,7 +240,9 @@ final class AppModel {
     }
 
     func canRunImageSelfTest(for providerID: UUID) -> Bool {
-        providerID == activeProviderID && status == .running
+        providerID == activeProviderID
+            && status == .running
+            && providers.first(where: { $0.id == providerID })?.supportsImageBridge == true
     }
 
     func runSelfTest(for providerID: UUID) {
@@ -243,15 +269,28 @@ final class AppModel {
     }
 
     func switchProvider(to id: UUID) {
+        checkingProviderIDs.insert(id)
         Task {
+            defer { checkingProviderIDs.remove(id) }
             do {
                 guard let database, let provider = providers.first(where: { $0.id == id }) else {
                     throw ProviderValidationError.missingProvider
                 }
-                let snapshot = try makeSnapshot(for: provider)
+                let candidate = try makeSnapshot(for: provider)
+                let result = await healthService.testModel(
+                    provider: candidate.profile,
+                    token: candidate.bearerToken
+                )
+                let verified = try await recordProviderHealth(result, provider: provider)
+                guard result.state != .unavailable else {
+                    throw ProviderValidationError.incompatibleToolCalling(
+                        result.message ?? "原生工具调用探针失败"
+                    )
+                }
+                let snapshot = try makeSnapshot(for: verified)
                 try await database.setActiveProvider(id: id)
                 activeProviderID = id
-                providerRouter?.update(snapshot)
+                try refreshRuntimeRouting(defaultSnapshot: snapshot)
                 lastError = nil
                 AppLog.info("Switched active Provider to \(provider.displayName)")
             } catch {
@@ -278,11 +317,48 @@ final class AppModel {
                 activeProviderID = provider.id
             }
             try await reloadProviders()
-            if let routerSnapshot {
-                providerRouter?.update(routerSnapshot)
+            if let routerSnapshot, configuration?.isEnabled == true {
+                try refreshRuntimeRouting(defaultSnapshot: routerSnapshot)
+            } else {
+                try refreshCatalogIfEnabled()
             }
             lastError = nil
             return provider
+        } catch {
+            fail(error)
+            return nil
+        }
+    }
+
+    func discoverProviderModels(_ id: UUID) async -> [ProviderModelRoute]? {
+        guard let provider = providers.first(where: { $0.id == id }) else {
+            fail(ProviderValidationError.missingProvider)
+            return nil
+        }
+        checkingProviderIDs.insert(id)
+        defer { checkingProviderIDs.remove(id) }
+        do {
+            let token: String?
+            if provider.credentialMode == .passthrough, provider.id == activeProviderID,
+               let configuration {
+                token = try? configEditor.bearerToken(for: configuration)
+            } else {
+                token = try credentialStore.token(for: id)
+            }
+            let discovered = try await healthService.discoverModels(provider: provider, token: token)
+            var routes = provider.effectiveModelRoutes
+            var known = Set(routes.map(\.modelID))
+            for modelID in discovered where known.insert(modelID).inserted {
+                routes.append(ProviderModelRoute(
+                    providerID: provider.id,
+                    modelID: modelID,
+                    displayName: modelID,
+                    inputModalities: provider.wireProtocol == .responses ? ["text", "image"] : ["text"],
+                    sortOrder: routes.count
+                ))
+            }
+            lastError = nil
+            return routes
         } catch {
             fail(error)
             return nil
@@ -306,6 +382,13 @@ final class AppModel {
                 duplicate.lastHealthLatencyMilliseconds = nil
                 duplicate.createdAt = Date()
                 duplicate.updatedAt = Date()
+                duplicate.models = source.models.enumerated().map { index, route in
+                    var copied = route
+                    copied.id = UUID()
+                    copied.providerID = duplicate.id
+                    copied.sortOrder = index
+                    return copied
+                }
                 if let token = try credentialStore.token(for: source.id) {
                     try credentialStore.setToken(token, for: duplicate.id)
                 }
@@ -316,6 +399,7 @@ final class AppModel {
                     try await database.reorderProviders(ids: orderedIDs)
                 }
                 try await reloadProviders()
+                try refreshCatalogIfEnabled()
             } catch {
                 fail(error)
             }
@@ -334,6 +418,7 @@ final class AppModel {
                 lastError = "Provider 已删除，但钥匙串密钥清理失败"
             }
             try await reloadProviders()
+            try refreshCatalogIfEnabled()
             return true
         } catch {
             fail(error)
@@ -410,6 +495,15 @@ final class AppModel {
             } catch {
                 fail(error)
             }
+        }
+    }
+
+    func setCrossProviderRoutingEnabled(_ enabled: Bool) {
+        crossProviderRoutingEnabled = enabled
+        providerRouter?.setAllowsCrossProviderRouting(enabled)
+        Task {
+            do { try await database?.setCrossProviderRoutingEnabled(enabled) }
+            catch { fail(error) }
         }
     }
 
@@ -600,13 +694,27 @@ final class AppModel {
             return
         }
         do {
-            let snapshot = try makeActiveSnapshot()
+            guard let provider = activeProvider else { throw ProviderValidationError.missingProvider }
+            checkingProviderIDs.insert(provider.id)
+            defer { checkingProviderIDs.remove(provider.id) }
+            let candidate = try makeSnapshot(for: provider)
+            let result = await healthService.testModel(
+                provider: candidate.profile,
+                token: candidate.bearerToken
+            )
+            let verified = try await recordProviderHealth(result, provider: provider)
+            guard result.state != .unavailable else {
+                throw ProviderValidationError.incompatibleToolCalling(
+                    result.message ?? "原生工具调用探针失败"
+                )
+            }
+            let snapshot = try makeSnapshot(for: verified)
             try await database?.setProxyPort(port)
             persistedProxyPort = port
             if let current = configuration, current.isEnabled {
                 if current.port == port {
                     try configEditor.activate(current)
-                    providerRouter?.update(snapshot)
+                    try refreshRuntimeRouting(defaultSnapshot: snapshot)
                     if server == nil { startProxy(with: current, snapshot: snapshot) }
                     return
                 }
@@ -621,6 +729,7 @@ final class AppModel {
             try stateStore.save(updated)
             configuration = updated
             inspection = nil
+            _ = try modelCatalogService.sync(provider: verified)
             enableLoginItemIfPossible()
             startProxy(with: updated, snapshot: snapshot)
         } catch {
@@ -632,7 +741,11 @@ final class AppModel {
         server?.stop()
         status = .starting
         lastError = nil
-        let router = ActiveProviderRouter(snapshot: snapshot)
+        let router = ActiveProviderRouter(
+            snapshot: snapshot,
+            snapshots: availableSnapshots(defaultSnapshot: snapshot),
+            allowsCrossProviderRouting: crossProviderRoutingEnabled
+        )
         providerRouter = router
         let server = NativeProxyServer(
             configuration: configuration,
@@ -683,10 +796,42 @@ final class AppModel {
 
     private func makeSnapshot(for provider: ProviderProfile) throws -> ActiveProviderSnapshot {
         let token = try credentialStore.token(for: provider.id)
-        if provider.credentialMode == .keychainBearer, token == nil {
+        if provider.credentialMode != .passthrough, token == nil {
             throw ProviderValidationError.missingCredential
         }
         return ActiveProviderSnapshot(profile: provider, bearerToken: token)
+    }
+
+    private func availableSnapshots(
+        defaultSnapshot: ActiveProviderSnapshot
+    ) -> [ActiveProviderSnapshot] {
+        providers.compactMap { provider in
+            if provider.id == defaultSnapshot.id { return defaultSnapshot }
+            guard provider.healthState != .unavailable else { return nil }
+            let token = (try? credentialStore.token(for: provider.id)) ?? nil
+            guard provider.credentialMode == .passthrough || token != nil else { return nil }
+            return ActiveProviderSnapshot(profile: provider, bearerToken: token)
+        }
+    }
+
+    private func refreshRuntimeRouting(defaultSnapshot: ActiveProviderSnapshot) throws {
+        _ = try modelCatalogService.sync(provider: defaultSnapshot.profile)
+        providerRouter?.update(
+            default: defaultSnapshot,
+            snapshots: availableSnapshots(defaultSnapshot: defaultSnapshot)
+        )
+    }
+
+    private func refreshCatalogIfEnabled() throws {
+        guard configuration?.isEnabled == true,
+              let defaultProvider = activeProvider else { return }
+        _ = try modelCatalogService.sync(provider: defaultProvider)
+        if let defaultSnapshot = try? makeSnapshot(for: defaultProvider) {
+            providerRouter?.update(
+                default: defaultSnapshot,
+                snapshots: availableSnapshots(defaultSnapshot: defaultSnapshot)
+            )
+        }
     }
 
     private func reloadProviders() async throws {
@@ -783,7 +928,7 @@ final class AppModel {
         checkingProviderIDs.insert(id)
         Task {
             let token: String?
-            if provider.credentialMode == .keychainBearer {
+            if provider.credentialMode == .keychainBearer || provider.credentialMode == .keychainAPIKey {
                 token = try? credentialStore.token(for: id)
             } else if provider.id == activeProviderID, let configuration {
                 token = try? configEditor.bearerToken(for: configuration)
@@ -794,23 +939,39 @@ final class AppModel {
                 ? await healthService.testModel(provider: provider, token: token)
                 : await healthService.measureEndpoint(provider: provider, token: token)
             do {
-                guard let database else { return }
-                var updated = provider
-                updated.healthState = result.state
-                updated.lastHealthLatencyMilliseconds = result.latencyMilliseconds
-                updated.lastHealthError = result.message
-                updated.lastCheckedAt = Date()
-                updated.updatedAt = Date()
-                try await database.saveProvider(updated)
-                try await reloadProviders()
-                if activeProviderID == id, let activeProvider {
-                    providerRouter?.update(try makeSnapshot(for: activeProvider))
-                }
+                _ = try await recordProviderHealth(result, provider: provider)
             } catch {
                 fail(error)
             }
             checkingProviderIDs.remove(id)
         }
+    }
+
+    private func recordProviderHealth(
+        _ result: ProviderHealthResult,
+        provider: ProviderProfile
+    ) async throws -> ProviderProfile {
+        guard let database else { throw ProviderValidationError.missingProvider }
+        var updated = provider
+        updated.healthState = result.state
+        updated.lastHealthLatencyMilliseconds = result.latencyMilliseconds
+        updated.lastHealthError = result.message
+        updated.lastCheckedAt = Date()
+        updated.updatedAt = Date()
+        try await database.saveProvider(updated)
+        try await reloadProviders()
+        let stored = providers.first(where: { $0.id == provider.id }) ?? updated
+        if activeProviderID == provider.id {
+            let snapshot = try makeSnapshot(for: stored)
+            if configuration?.isEnabled == true {
+                try refreshRuntimeRouting(defaultSnapshot: snapshot)
+            } else {
+                providerRouter?.update(snapshot)
+            }
+        } else {
+            try refreshCatalogIfEnabled()
+        }
+        return stored
     }
 
     private func handleServerState(_ result: Result<Void, Error>) {
