@@ -86,7 +86,7 @@ struct SettingsView: View {
                             get: { model.crossProviderRoutingEnabled },
                             set: { model.setCrossProviderRoutingEnabled($0) }
                         ))
-                        Text("默认关闭。开启后可通过 provider/model 手动指定其他 Provider；Codex 模型菜单仍只显示当前 Provider。")
+                        Text("默认开启。开启后可通过 provider/model 手动指定其他 Provider；Codex 模型菜单仍只显示当前 Provider。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
