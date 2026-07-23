@@ -425,10 +425,20 @@ private enum ProviderCreationTemplate: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .responses: "Responses 中转站"
-        case .compatibleChat: "通用 Chat Completions"
-        case .compatibleAnthropic: "Anthropic Messages 中转站"
-        case .anthropicAPI: "Anthropic 官方 API"
+        case .responses: "Codex 原生中转站"
+        case .compatibleChat: "OpenAI 兼容中转站"
+        case .compatibleAnthropic: "Claude 中转站（第三方）"
+        case .anthropicAPI: "Anthropic 官方"
+        }
+    }
+
+    /// 面向普通用户的适用说明：按"我的服务属于哪种"来选，而非协议名。
+    var description: String {
+        switch self {
+        case .responses: "中转站支持 Codex 原生协议，功能最完整。如果中转站文档提到 Responses API 或可直接用于 Codex，选这个。"
+        case .compatibleChat: "中转站只提供 OpenAI 兼容接口（多数国产 / 聚合 API 属于此类）。GPTSwitch 会做协议转换。"
+        case .compatibleAnthropic: "第三方中转站提供 Claude 模型（走 Anthropic 协议）。区别于官方直连。"
+        case .anthropicAPI: "直连 Anthropic 官方 API（api.anthropic.com），使用 Claude 模型与官方 API Key。"
         }
     }
 }
@@ -474,6 +484,11 @@ private struct ProviderCreateView: View {
             .onChange(of: template) {
                 applyTemplate(template)
             }
+            Text(template.description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
             ProviderEditorForm(draft: $draft, apiKey: $apiKey, hasStoredCredential: false)
             if let error = model.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
