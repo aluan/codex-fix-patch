@@ -330,7 +330,10 @@ actor AppDatabase: ProviderRepository, UsageRepository, PricingCatalog {
     }
 
     func crossProviderRoutingEnabled() async throws -> Bool {
-        try setting("cross_provider_routing_enabled") == "1"
+        // 未设置时默认开启：让 catalog 一次性列出所有 provider 的模型，
+        // 切换 provider 不改写 catalog，Codex CLI 不必重启即可见全部模型。
+        let stored = try setting("cross_provider_routing_enabled")
+        return stored == nil ? true : stored == "1"
     }
 
     func setCrossProviderRoutingEnabled(_ enabled: Bool) async throws {

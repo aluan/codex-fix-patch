@@ -144,7 +144,8 @@ final class NativeProxyServer: @unchecked Sendable {
             let codexShape = query.contains { $0.name == "client_version" }
             let data = try CodexModelCatalogService().modelsResponse(
                 provider: providerRouter.snapshot().profile,
-                codexShape: codexShape
+                codexShape: codexShape,
+                crossProvider: providerRouter.isCrossProviderRoutingEnabled()
             )
             HTTPResponseWriter.send(
                 status: 200,

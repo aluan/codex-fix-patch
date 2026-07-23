@@ -42,6 +42,12 @@ final class ActiveProviderRouter: @unchecked Sendable {
         return Array(values.values)
     }
 
+    func isCrossProviderRoutingEnabled() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return allowsCrossProviderRouting
+    }
+
     func setAllowsCrossProviderRouting(_ enabled: Bool) {
         lock.lock()
         allowsCrossProviderRouting = enabled

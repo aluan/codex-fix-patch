@@ -17,7 +17,7 @@ final class AppModel {
     private(set) var usageResult = UsageQueryResult()
     private(set) var statisticsEnabled = true
     private(set) var retentionDays = 90
-    private(set) var crossProviderRoutingEnabled = false
+    private(set) var crossProviderRoutingEnabled = true
     private(set) var checkingProviderIDs: Set<UUID> = []
     private(set) var persistedProxyPort: UInt16 = 17891
     private(set) var skinThemes: [SkinTheme] = BuiltInSkinCatalog.themes
@@ -162,7 +162,11 @@ final class AppModel {
                     return
                 }
                 try configEditor.activate(saved)
-                _ = try modelCatalogService.sync(provider: verified)
+                _ = try modelCatalogService.sync(
+                    provider: verified,
+                    allProviders: providers,
+                    crossProvider: crossProviderRoutingEnabled
+                )
                 enableLoginItemIfPossible(refresh: saved.toolVersion != ProxyConfiguration.currentToolVersion)
                 let snapshot = try makeSnapshot(for: verified)
                 startProxy(with: saved, snapshot: snapshot)
@@ -502,9 +506,24 @@ final class AppModel {
         crossProviderRoutingEnabled = enabled
         providerRouter?.setAllowsCrossProviderRouting(enabled)
         Task {
-            do { try await database?.setCrossProviderRoutingEnabled(enabled) }
-            catch { fail(error) }
+            do {
+                try await database?.setCrossProviderRoutingEnabled(enabled)
+                // 重写 catalog：开关切换改变 catalog 列出的模型范围，
+                // 同步落盘后下次 Codex CLI 读取即可见。
+                try await refreshCatalog()
+            } catch { fail(error) }
         }
+    }
+
+    /// 重新同步模型 catalog（按当前跨 provider 开关列出激活或全部 provider 的模型）。
+    @MainActor
+    private func refreshCatalog() async throws {
+        guard configuration?.isEnabled == true, let activeProvider else { return }
+        _ = try modelCatalogService.sync(
+            provider: activeProvider,
+            allProviders: providers,
+            crossProvider: crossProviderRoutingEnabled
+        )
     }
 
     func clearUsage() {
@@ -815,7 +834,11 @@ final class AppModel {
     }
 
     private func refreshRuntimeRouting(defaultSnapshot: ActiveProviderSnapshot) throws {
-        _ = try modelCatalogService.sync(provider: defaultSnapshot.profile)
+        _ = try modelCatalogService.sync(
+            provider: defaultSnapshot.profile,
+            allProviders: providers,
+            crossProvider: crossProviderRoutingEnabled
+        )
         providerRouter?.update(
             default: defaultSnapshot,
             snapshots: availableSnapshots(defaultSnapshot: defaultSnapshot)
@@ -825,7 +848,11 @@ final class AppModel {
     private func refreshCatalogIfEnabled() throws {
         guard configuration?.isEnabled == true,
               let defaultProvider = activeProvider else { return }
-        _ = try modelCatalogService.sync(provider: defaultProvider)
+        _ = try modelCatalogService.sync(
+            provider: defaultProvider,
+            allProviders: providers,
+            crossProvider: crossProviderRoutingEnabled
+        )
         if let defaultSnapshot = try? makeSnapshot(for: defaultProvider) {
             providerRouter?.update(
                 default: defaultSnapshot,

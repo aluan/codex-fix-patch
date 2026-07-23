@@ -21,19 +21,19 @@ final class AppDatabaseTests: XCTestCase {
         XCTAssertEqual(persistedPort, 23456)
     }
 
-    func testCrossProviderRoutingDefaultsOffAndPersists() async throws {
+    func testCrossProviderRoutingDefaultsOnAndPersists() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let databaseURL = directory.appendingPathComponent("test.sqlite3")
         let database = try AppDatabase(url: databaseURL)
 
         let defaultValue = try await database.crossProviderRoutingEnabled()
-        XCTAssertFalse(defaultValue)
-        try await database.setCrossProviderRoutingEnabled(true)
+        XCTAssertTrue(defaultValue, "未设置时默认开启跨 provider 路由，catalog 一次性列出全部模型")
+        try await database.setCrossProviderRoutingEnabled(false)
 
         let reopened = try AppDatabase(url: databaseURL)
         let persistedValue = try await reopened.crossProviderRoutingEnabled()
-        XCTAssertTrue(persistedValue)
+        XCTAssertFalse(persistedValue)
     }
 
     func testPersistsProviderModelRoutes() async throws {

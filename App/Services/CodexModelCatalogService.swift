@@ -27,6 +27,8 @@ struct CodexModelCatalogService: Sendable {
 
     func sync(
         provider: ProviderProfile,
+        allProviders: [ProviderProfile] = [],
+        crossProvider: Bool = false,
         configURL: URL = AppPaths.codexConfig,
         catalogURL: URL = AppPaths.codexModelCatalog,
         cacheURL: URL = AppPaths.codexModelsCache,
@@ -76,11 +78,19 @@ struct CodexModelCatalogService: Sendable {
 
         var routedModels: [[String: Any]] = []
         var priority = 100
-        if provider.healthState != .unavailable {
-            for route in provider.effectiveModelRoutes where route.isEnabled {
+        // 跨 provider 路由开启时，一次性列出所有 provider 的模型，使 catalog 不随激活 provider
+        // 切换而变化——Codex CLI 不必重启即可见全部模型。否则只列激活 provider 的模型。
+        let providersToList: [ProviderProfile]
+        if crossProvider, !allProviders.isEmpty {
+            providersToList = allProviders.filter { $0.healthState != .unavailable }
+        } else {
+            providersToList = provider.healthState != .unavailable ? [provider] : []
+        }
+        for profile in providersToList {
+            for route in profile.effectiveModelRoutes where route.isEnabled {
                 routedModels.append(makeCatalogEntry(
                     template: template,
-                    provider: provider,
+                    provider: profile,
                     route: route,
                     priority: priority
                 ))
@@ -144,13 +154,14 @@ struct CodexModelCatalogService: Sendable {
     func modelsResponse(
         provider: ProviderProfile,
         catalogURL: URL = AppPaths.codexModelCatalog,
-        codexShape: Bool
+        codexShape: Bool,
+        crossProvider: Bool = false
     ) throws -> Data {
         let catalog = try readJSONObject(catalogURL)
         let models = (catalog["models"] as? [[String: Any]] ?? []).filter { entry in
             guard let slug = entry["slug"] as? String,
                   let slash = slug.firstIndex(of: "/") else { return false }
-            return String(slug[..<slash]) == provider.configName
+            return crossProvider || String(slug[..<slash]) == provider.configName
         }
         if codexShape {
             return try JSONSerialization.data(withJSONObject: ["models": models])
